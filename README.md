@@ -42,3 +42,7 @@ services.sophon = {
 ```
 
 The module creates a systemd user service and you wire the hooks in your Claude Code settings to point at `sophon hook`.
+
+## Note
+
+This is tailored to my specific workflow (NixOS, tmux, self-hosted ntfy, Tailscale). It's not designed as a general-purpose tool — more of a personal project that others might find interesting to read or fork. I'll write more about the motivation and setup soon and link to it here.
