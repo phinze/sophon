@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 
 	"github.com/phinze/sophon/server"
+	"github.com/phinze/sophon/store"
 )
 
 func runDaemon(args []string) error {
@@ -16,6 +18,7 @@ func runDaemon(args []string) error {
 	baseURL := fs.String("base-url", "", "public base URL for sophon (e.g. https://host)")
 	minAge := fs.Int("min-session-age", 120, "minimum session age in seconds before stop notifications")
 	logLevel := fs.String("log-level", "info", "log level (debug, info, warn, error)")
+	dataDir := fs.String("data-dir", defaultDataDir(), "directory for persistent data (SQLite database)")
 
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -47,6 +50,20 @@ func runDaemon(args []string) error {
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
 
+	// Create data directory and open store
+	if err := os.MkdirAll(*dataDir, 0o700); err != nil {
+		return fmt.Errorf("creating data directory: %w", err)
+	}
+
+	dbPath := filepath.Join(*dataDir, "sophon.db")
+	st, err := store.Open(dbPath)
+	if err != nil {
+		return fmt.Errorf("opening database: %w", err)
+	}
+	defer st.Close()
+
+	logger.Info("database opened", "path", dbPath)
+
 	cfg := server.Config{
 		Port:          *port,
 		NtfyURL:       *ntfyURL,
@@ -54,6 +71,17 @@ func runDaemon(args []string) error {
 		MinSessionAge: *minAge,
 	}
 
-	srv := server.New(cfg, logger)
+	srv := server.New(cfg, st, logger)
 	return srv.Run()
+}
+
+func defaultDataDir() string {
+	if dir := os.Getenv("XDG_DATA_HOME"); dir != "" {
+		return filepath.Join(dir, "sophon")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return filepath.Join(".", "sophon-data")
+	}
+	return filepath.Join(home, ".local", "share", "sophon")
 }

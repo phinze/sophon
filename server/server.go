@@ -3,35 +3,24 @@ package server
 import (
 	"embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html/template"
 	"log/slog"
 	"net/http"
-	"strings"
-	"sync"
 	"time"
+
+	"github.com/phinze/sophon/store"
 )
 
 //go:embed templates/*.html
 var templateFS embed.FS
 
-var tmpl = template.Must(template.ParseFS(templateFS, "templates/*.html"))
-
-// Session represents a Claude Code session.
-type Session struct {
-	ID        string    `json:"session_id"`
-	TmuxPane  string    `json:"tmux_pane"`
-	Cwd       string    `json:"cwd"`
-	Project   string    `json:"project"`
-	StartedAt time.Time `json:"started_at"`
-	StoppedAt time.Time `json:"stopped_at,omitempty"` // soft-delete; zero means active
-
-	// Latest notification context
-	NotificationType string `json:"notification_type,omitempty"`
-	NotifyTitle      string `json:"notify_title,omitempty"`
-	NotifyMessage    string `json:"notify_message,omitempty"`
-	NotifiedAt       time.Time `json:"notified_at,omitempty"`
-}
+var tmpl = template.Must(
+	template.New("").Funcs(template.FuncMap{
+		"timeAgo": timeAgo,
+	}).ParseFS(templateFS, "templates/*.html"),
+)
 
 // Config holds server configuration.
 type Config struct {
@@ -43,18 +32,17 @@ type Config struct {
 
 // Server is the sophon HTTP server.
 type Server struct {
-	cfg      Config
-	sessions map[string]*Session
-	mu       sync.RWMutex
-	logger   *slog.Logger
+	cfg   Config
+	store *store.Store
+	logger *slog.Logger
 }
 
 // New creates a new Server.
-func New(cfg Config, logger *slog.Logger) *Server {
+func New(cfg Config, st *store.Store, logger *slog.Logger) *Server {
 	return &Server{
-		cfg:      cfg,
-		sessions: make(map[string]*Session),
-		logger:   logger,
+		cfg:   cfg,
+		store: st,
+		logger: logger,
 	}
 }
 
@@ -74,6 +62,7 @@ func (s *Server) Run() error {
 
 	// Web UI
 	mux.HandleFunc("GET /sophon/respond/{id}", s.handleRespondPage)
+	mux.HandleFunc("GET /sophon/", s.handleSessionsPage)
 
 	// Health check
 	mux.HandleFunc("GET /sophon/health", func(w http.ResponseWriter, r *http.Request) {
@@ -97,9 +86,9 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	project := projectFromCwd(req.Cwd)
+	project := store.ProjectFromCwd(req.Cwd)
 
-	sess := &Session{
+	sess := &store.Session{
 		ID:        req.SessionID,
 		TmuxPane:  req.TmuxPane,
 		Cwd:       req.Cwd,
@@ -107,9 +96,11 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		StartedAt: time.Now(),
 	}
 
-	s.mu.Lock()
-	s.sessions[req.SessionID] = sess
-	s.mu.Unlock()
+	if err := s.store.CreateSession(sess); err != nil {
+		s.logger.Error("failed to create session", "error", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
 
 	s.logger.Info("session registered", "session_id", req.SessionID, "project", project, "pane", req.TmuxPane)
 	w.WriteHeader(http.StatusCreated)
@@ -129,32 +120,42 @@ func (s *Server) handleNotify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.mu.Lock()
-	sess, ok := s.sessions[id]
-	if ok {
+	sess, err := s.store.GetSession(id)
+	if errors.Is(err, store.ErrNotFound) {
+		// Create a temporary session for notifications without prior SessionStart
+		sess = &store.Session{
+			ID:        id,
+			Cwd:       req.Cwd,
+			Project:   store.ProjectFromCwd(req.Cwd),
+			StartedAt: time.Now(),
+		}
+	} else if err != nil {
+		s.logger.Error("failed to get session", "error", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	} else {
+		// Revive stopped sessions
 		if !sess.StoppedAt.IsZero() {
 			s.logger.Info("reviving stopped session", "session_id", id, "stopped_for", time.Since(sess.StoppedAt).Round(time.Second), "notification_type", req.NotificationType)
 			sess.StoppedAt = time.Time{}
 		}
-		sess.NotificationType = req.NotificationType
-		sess.NotifyTitle = req.Title
-		sess.NotifyMessage = req.Message
-		sess.NotifiedAt = time.Now()
-	} else {
-		// Create a temporary session for notifications without prior SessionStart
-		sess = &Session{
-			ID:               id,
-			Cwd:              req.Cwd,
-			Project:          projectFromCwd(req.Cwd),
-			StartedAt:        time.Now(),
-			NotificationType: req.NotificationType,
-			NotifyTitle:      req.Title,
-			NotifyMessage:    req.Message,
-			NotifiedAt:       time.Now(),
+		// Backfill project/cwd if missing
+		if sess.Project == "" && req.Cwd != "" {
+			sess.Cwd = req.Cwd
+			sess.Project = store.ProjectFromCwd(req.Cwd)
 		}
-		s.sessions[id] = sess
 	}
-	s.mu.Unlock()
+
+	sess.NotificationType = req.NotificationType
+	sess.NotifyTitle = req.Title
+	sess.NotifyMessage = req.Message
+	sess.NotifiedAt = time.Now()
+
+	if err := s.store.CreateSession(sess); err != nil {
+		s.logger.Error("failed to save session", "error", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
 
 	// Send ntfy notification
 	s.sendNotification(sess, req.NotificationType, req.Message)
@@ -166,41 +167,50 @@ func (s *Server) handleNotify(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 
-	s.mu.Lock()
-	sess, ok := s.sessions[id]
-	if ok {
-		sess.StoppedAt = time.Now()
+	sess, err := s.store.GetSession(id)
+	if errors.Is(err, store.ErrNotFound) {
+		w.WriteHeader(http.StatusOK)
+		return
+	} else if err != nil {
+		s.logger.Error("failed to get session", "error", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
 	}
-	s.mu.Unlock()
 
-	if ok {
-		elapsed := time.Since(sess.StartedAt)
-		if int(elapsed.Seconds()) >= s.cfg.MinSessionAge {
-			mins := int(elapsed.Minutes())
-			s.sendStopNotification(sess, mins)
-		}
-		s.logger.Info("session stopped", "session_id", id, "duration", elapsed.Round(time.Second))
+	sess.StoppedAt = time.Now()
+	if err := s.store.UpdateSession(sess); err != nil {
+		s.logger.Error("failed to update session", "error", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
 	}
+
+	elapsed := time.Since(sess.StartedAt)
+	if int(elapsed.Seconds()) >= s.cfg.MinSessionAge {
+		mins := int(elapsed.Minutes())
+		s.sendStopNotification(sess, mins)
+	}
+	s.logger.Info("session stopped", "session_id", id, "duration", elapsed.Round(time.Second))
 
 	w.WriteHeader(http.StatusOK)
 }
 
 type respondPageData struct {
-	Session  *Session
-	BaseURL  string
-	TimeAgo  string
-	HasPerm  bool
+	Session *store.Session
+	BaseURL string
+	TimeAgo string
+	HasPerm bool
 }
 
 func (s *Server) handleRespondPage(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 
-	s.mu.RLock()
-	sess, ok := s.sessions[id]
-	s.mu.RUnlock()
-
-	if !ok {
+	sess, err := s.store.GetSession(id)
+	if errors.Is(err, store.ErrNotFound) {
 		http.Error(w, "session not found", http.StatusNotFound)
+		return
+	} else if err != nil {
+		s.logger.Error("failed to get session", "error", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 
@@ -229,12 +239,13 @@ func (s *Server) handleRespond(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.mu.RLock()
-	sess, ok := s.sessions[id]
-	s.mu.RUnlock()
-
-	if !ok {
+	sess, err := s.store.GetSession(id)
+	if errors.Is(err, store.ErrNotFound) {
 		http.Error(w, "session not found", http.StatusNotFound)
+		return
+	} else if err != nil {
+		s.logger.Error("failed to get session", "error", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 
@@ -249,16 +260,38 @@ func (s *Server) handleRespond(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"status": "sent"})
 }
 
-// projectFromCwd extracts last two path components as project name.
-func projectFromCwd(cwd string) string {
-	parts := strings.Split(strings.TrimRight(cwd, "/"), "/")
-	if len(parts) >= 2 {
-		return parts[len(parts)-2] + "/" + parts[len(parts)-1]
+type sessionsPageData struct {
+	Active  []*store.Session
+	Recent  []*store.Session
+	BaseURL string
+}
+
+func (s *Server) handleSessionsPage(w http.ResponseWriter, r *http.Request) {
+	active, err := s.store.ListActiveSessions()
+	if err != nil {
+		s.logger.Error("failed to list active sessions", "error", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
 	}
-	if len(parts) == 1 {
-		return parts[0]
+
+	recent, err := s.store.ListRecentSessions(20)
+	if err != nil {
+		s.logger.Error("failed to list recent sessions", "error", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
 	}
-	return "unknown"
+
+	data := sessionsPageData{
+		Active:  active,
+		Recent:  recent,
+		BaseURL: s.cfg.BaseURL,
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := tmpl.ExecuteTemplate(w, "sessions.html", data); err != nil {
+		s.logger.Error("template render failed", "error", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+	}
 }
 
 // reapSessions periodically removes sessions that have been stopped longer than the TTL.
@@ -266,14 +299,14 @@ func (s *Server) reapSessions() {
 	ticker := time.NewTicker(1 * time.Minute)
 	defer ticker.Stop()
 	for range ticker.C {
-		s.mu.Lock()
-		for id, sess := range s.sessions {
-			if !sess.StoppedAt.IsZero() && time.Since(sess.StoppedAt) > stoppedSessionTTL {
-				delete(s.sessions, id)
-				s.logger.Info("session reaped", "session_id", id, "stopped_for", time.Since(sess.StoppedAt).Round(time.Second))
-			}
+		reaped, err := s.store.ReapStoppedSessions(stoppedSessionTTL)
+		if err != nil {
+			s.logger.Error("failed to reap sessions", "error", err)
+			continue
 		}
-		s.mu.Unlock()
+		for _, id := range reaped {
+			s.logger.Info("session reaped", "session_id", id)
+		}
 	}
 }
 

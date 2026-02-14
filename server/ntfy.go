@@ -4,10 +4,12 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+
+	"github.com/phinze/sophon/store"
 )
 
 // sendNotification sends an ntfy push notification for a session event.
-func (s *Server) sendNotification(sess *Session, notificationType, message string) {
+func (s *Server) sendNotification(sess *store.Session, notificationType, message string) {
 	if s.cfg.NtfyURL == "" {
 		return
 	}
@@ -48,7 +50,7 @@ func (s *Server) sendNotification(sess *Session, notificationType, message strin
 }
 
 // sendStopNotification sends a session completion notification.
-func (s *Server) sendStopNotification(sess *Session, mins int) {
+func (s *Server) sendStopNotification(sess *store.Session, mins int) {
 	if s.cfg.NtfyURL == "" {
 		return
 	}

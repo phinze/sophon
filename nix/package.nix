@@ -9,7 +9,7 @@ buildGoModule {
     name = "sophon-source";
   };
 
-  vendorHash = null; # No external dependencies
+  vendorHash = "sha256-h6cHghxBPGqLh80r5q8zipjBOUZdtbPpGlVEH/AYvhI=";
 
   env.CGO_ENABLED = "0";
 
