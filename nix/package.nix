@@ -16,7 +16,7 @@ buildGoModule {
   meta = with lib; {
     description = "Notification + response relay for Claude Code sessions";
     homepage = "https://github.com/phinze/sophon";
-    license = licenses.mit;
+    license = licenses.asl20;
     maintainers = [ ];
     mainProgram = "sophon";
   };
