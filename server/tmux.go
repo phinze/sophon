@@ -13,5 +13,9 @@ func tmuxSendKeys(pane, text string) error {
 
 	// Use tmux send-keys to type the text and press Enter
 	cmd := exec.Command("tmux", "send-keys", "-t", pane, text, "Enter")
-	return cmd.Run()
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%w: %s", err, string(output))
+	}
+	return nil
 }
