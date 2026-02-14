@@ -1,8 +1,8 @@
-{ lib, buildGoModule }:
+{ lib, buildGoModule, lastModifiedDate ? "19700101000000" }:
 
 buildGoModule {
   pname = "sophon";
-  version = "0.1.0";
+  version = "0.1.0-${builtins.substring 0 12 lastModifiedDate}";
 
   src = builtins.path {
     path = ./..;

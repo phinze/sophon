@@ -16,7 +16,7 @@
       system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
-        sophon = pkgs.callPackage ./nix/package.nix { };
+        sophon = pkgs.callPackage ./nix/package.nix { lastModifiedDate = self.lastModifiedDate; };
       in
       {
         packages = {
