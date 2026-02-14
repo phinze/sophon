@@ -91,17 +91,11 @@ in
         Restart = "on-failure";
         RestartSec = "5s";
 
-        # Security hardening (no PrivateTmp — tmux client needs the real /tmp or TMUX_TMPDIR)
-        ProtectSystem = "strict";
-        ProtectHome = "read-only";
-
         # tmux must be in PATH for send-keys responses
-        # TMUX_TMPDIR lets tmux find the socket under /run/user instead of /tmp
         Environment = [
           "SOPHON_DAEMON_URL=http://127.0.0.1:${toString cfg.daemon.port}"
           "SOPHON_NTFY_URL=${cfg.ntfyUrl}"
           "PATH=${pkgs.tmux}/bin:/run/current-system/sw/bin"
-          "TMUX_TMPDIR=%t/tmux-%U"
         ];
       };
 
