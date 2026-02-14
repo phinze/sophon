@@ -91,11 +91,12 @@ in
         Restart = "on-failure";
         RestartSec = "5s";
 
-        # tmux must be in PATH for send-keys responses
+        # tmux needs PATH and TMUX_TMPDIR to find the socket at /run/user/<uid>/tmux-<uid>/
         Environment = [
           "SOPHON_DAEMON_URL=http://127.0.0.1:${toString cfg.daemon.port}"
           "SOPHON_NTFY_URL=${cfg.ntfyUrl}"
           "PATH=${pkgs.tmux}/bin:/run/current-system/sw/bin"
+          "TMUX_TMPDIR=%t"
         ];
       };
 
