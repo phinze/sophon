@@ -24,6 +24,7 @@ type Session struct {
 	Cwd       string    `json:"cwd"`
 	Project   string    `json:"project"`
 	StartedAt time.Time `json:"started_at"`
+	StoppedAt time.Time `json:"stopped_at,omitempty"` // soft-delete; zero means active
 
 	// Latest notification context
 	NotificationType string `json:"notification_type,omitempty"`
@@ -57,8 +58,12 @@ func New(cfg Config, logger *slog.Logger) *Server {
 	}
 }
 
+const stoppedSessionTTL = 24 * time.Hour
+
 // Run starts the HTTP server.
 func (s *Server) Run() error {
+	go s.reapSessions()
+
 	mux := http.NewServeMux()
 
 	// API routes
@@ -117,6 +122,7 @@ func (s *Server) handleNotify(w http.ResponseWriter, r *http.Request) {
 		NotificationType string `json:"notification_type"`
 		Title            string `json:"title"`
 		Message          string `json:"message"`
+		Cwd              string `json:"cwd"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
@@ -126,28 +132,29 @@ func (s *Server) handleNotify(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	sess, ok := s.sessions[id]
 	if ok {
+		if !sess.StoppedAt.IsZero() {
+			s.logger.Info("reviving stopped session", "session_id", id, "stopped_for", time.Since(sess.StoppedAt).Round(time.Second), "notification_type", req.NotificationType)
+			sess.StoppedAt = time.Time{}
+		}
 		sess.NotificationType = req.NotificationType
 		sess.NotifyTitle = req.Title
 		sess.NotifyMessage = req.Message
 		sess.NotifiedAt = time.Now()
-	}
-	s.mu.Unlock()
-
-	if !ok {
+	} else {
 		// Create a temporary session for notifications without prior SessionStart
 		sess = &Session{
 			ID:               id,
-			Project:          "unknown",
+			Cwd:              req.Cwd,
+			Project:          projectFromCwd(req.Cwd),
 			StartedAt:        time.Now(),
 			NotificationType: req.NotificationType,
 			NotifyTitle:      req.Title,
 			NotifyMessage:    req.Message,
 			NotifiedAt:       time.Now(),
 		}
-		s.mu.Lock()
 		s.sessions[id] = sess
-		s.mu.Unlock()
 	}
+	s.mu.Unlock()
 
 	// Send ntfy notification
 	s.sendNotification(sess, req.NotificationType, req.Message)
@@ -162,7 +169,7 @@ func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	sess, ok := s.sessions[id]
 	if ok {
-		delete(s.sessions, id)
+		sess.StoppedAt = time.Now()
 	}
 	s.mu.Unlock()
 
@@ -172,7 +179,7 @@ func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
 			mins := int(elapsed.Minutes())
 			s.sendStopNotification(sess, mins)
 		}
-		s.logger.Info("session removed", "session_id", id, "duration", elapsed.Round(time.Second))
+		s.logger.Info("session stopped", "session_id", id, "duration", elapsed.Round(time.Second))
 	}
 
 	w.WriteHeader(http.StatusOK)
@@ -252,6 +259,22 @@ func projectFromCwd(cwd string) string {
 		return parts[0]
 	}
 	return "unknown"
+}
+
+// reapSessions periodically removes sessions that have been stopped longer than the TTL.
+func (s *Server) reapSessions() {
+	ticker := time.NewTicker(1 * time.Minute)
+	defer ticker.Stop()
+	for range ticker.C {
+		s.mu.Lock()
+		for id, sess := range s.sessions {
+			if !sess.StoppedAt.IsZero() && time.Since(sess.StoppedAt) > stoppedSessionTTL {
+				delete(s.sessions, id)
+				s.logger.Info("session reaped", "session_id", id, "stopped_for", time.Since(sess.StoppedAt).Round(time.Second))
+			}
+		}
+		s.mu.Unlock()
+	}
 }
 
 func timeAgo(t time.Time) string {

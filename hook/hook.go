@@ -79,6 +79,7 @@ func handleNotification(cfg Config, event HookEvent) error {
 		"notification_type": event.NotificationType,
 		"title":             title,
 		"message":           event.Message,
+		"cwd":               event.Cwd,
 	}
 
 	err := postJSON(cfg.DaemonURL+"/api/sessions/"+event.SessionID+"/notify", body)
