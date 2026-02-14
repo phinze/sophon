@@ -96,10 +96,11 @@ in
         ProtectSystem = "strict";
         ProtectHome = "read-only";
 
-        # Environment for the hook to find the daemon
+        # tmux must be in PATH for send-keys responses
         Environment = [
           "SOPHON_DAEMON_URL=http://127.0.0.1:${toString cfg.daemon.port}"
           "SOPHON_NTFY_URL=${cfg.ntfyUrl}"
+          "PATH=${pkgs.tmux}/bin:/run/current-system/sw/bin"
         ];
       };
 
