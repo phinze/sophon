@@ -33,6 +33,25 @@ in
       example = "https://foxtrotbase.swallow-galaxy.ts.net";
     };
 
+    daemonUrl = mkOption {
+      type = types.str;
+      description = "URL where the sophon daemon is reachable. Set automatically to localhost when daemon.enable is true.";
+      example = "https://foxtrotbase.swallow-galaxy.ts.net";
+    };
+
+    hookCommand = mkOption {
+      type = types.str;
+      readOnly = true;
+      default = concatStringsSep " " [
+        "${cfg.package}/bin/sophon"
+        "hook"
+        "--daemon-url ${cfg.daemonUrl}"
+        "--ntfy-url ${cfg.ntfyUrl}"
+      ];
+      defaultText = literalExpression ''"''${cfg.package}/bin/sophon hook --daemon-url ''${cfg.daemonUrl} --ntfy-url ''${cfg.ntfyUrl}"'';
+      description = "Full hook command with daemon and ntfy URLs baked in. Use this in Claude Code hook configuration.";
+    };
+
     minSessionAge = mkOption {
       type = types.int;
       default = 120;
@@ -42,7 +61,7 @@ in
     daemon = {
       enable = mkOption {
         type = types.bool;
-        default = true;
+        default = false;
         description = "Run the sophon daemon as a systemd user service.";
       };
 
@@ -66,11 +85,17 @@ in
     };
   };
 
-  config = mkIf cfg.enable {
-    home.packages = [ cfg.package ];
+  config = mkIf cfg.enable (mkMerge [
+    {
+      home.packages = [ cfg.package ];
+    }
 
-    # Systemd user service for the daemon
-    systemd.user.services.sophon = mkIf cfg.daemon.enable {
+    # When daemon is enabled locally, default daemonUrl to localhost
+    (mkIf cfg.daemon.enable {
+      services.sophon.daemonUrl = mkDefault "http://127.0.0.1:${toString cfg.daemon.port}";
+
+      # Systemd user service for the daemon
+      systemd.user.services.sophon = {
       Unit = {
         Description = "Sophon - Claude Code notification + response relay";
         Documentation = "https://github.com/phinze/sophon";
@@ -93,7 +118,7 @@ in
 
         # tmux needs PATH and TMUX_TMPDIR to find the socket at /run/user/<uid>/tmux-<uid>/
         Environment = [
-          "SOPHON_DAEMON_URL=http://127.0.0.1:${toString cfg.daemon.port}"
+          "SOPHON_DAEMON_URL=${cfg.daemonUrl}"
           "SOPHON_NTFY_URL=${cfg.ntfyUrl}"
           "PATH=${pkgs.tmux}/bin:/run/current-system/sw/bin"
           "TMUX_TMPDIR=%t"
@@ -104,5 +129,6 @@ in
         WantedBy = [ "default.target" ];
       };
     };
-  };
+    })
+  ]);
 }
