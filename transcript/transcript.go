@@ -10,8 +10,9 @@ import (
 
 // Block is a displayable piece of a message.
 type Block struct {
-	Type string `json:"type"` // "text" or "tool_use"
-	Text string `json:"text"`
+	Type  string          `json:"type"` // "text" or "tool_use"
+	Text  string          `json:"text"`
+	Input json.RawMessage `json:"input,omitempty"` // tool_use input (preserved for select tools)
 }
 
 // Message is a single user or assistant turn.
@@ -97,11 +98,16 @@ type messageEnvelope struct {
 
 // contentBlock is a single block in the content array.
 type contentBlock struct {
-	Type    string `json:"type"`
-	Text    string `json:"text"`
-	Name    string `json:"name"`    // for tool_use
-	Input   any    `json:"input"`   // for tool_use
-	Content any    `json:"content"` // for tool_result
+	Type    string          `json:"type"`
+	Text    string          `json:"text"`
+	Name    string          `json:"name"`    // for tool_use
+	Input   json.RawMessage `json:"input"`   // for tool_use
+	Content any             `json:"content"` // for tool_result
+}
+
+// toolsWithDisplayableInput lists tool names whose Input should be preserved for display.
+var toolsWithDisplayableInput = map[string]bool{
+	"AskUserQuestion": true,
 }
 
 func parseLine(line []byte) (Message, bool) {
@@ -204,7 +210,11 @@ func parseAssistantEntry(entry jsonlEntry) (Message, bool) {
 				displayBlocks = append(displayBlocks, Block{Type: "text", Text: b.Text})
 			}
 		case "tool_use":
-			displayBlocks = append(displayBlocks, Block{Type: "tool_use", Text: b.Name})
+			blk := Block{Type: "tool_use", Text: b.Name}
+			if toolsWithDisplayableInput[b.Name] && len(b.Input) > 0 {
+				blk.Input = b.Input
+			}
+			displayBlocks = append(displayBlocks, blk)
 		case "thinking":
 			// skip
 		default:

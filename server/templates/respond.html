@@ -149,6 +149,40 @@
     color: #8888bb;
     padding: 2px 0;
   }
+  .ask-question {
+    margin-top: 4px;
+    white-space: normal;
+  }
+  .ask-question .question-header {
+    font-size: 11px;
+    font-weight: 600;
+    color: #9999cc;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 4px;
+  }
+  .ask-question .question-text {
+    font-size: 14px;
+    color: #d0d0e0;
+    margin-bottom: 8px;
+  }
+  .ask-question .option {
+    background: #1a1a3a;
+    border: 1px solid #3a3a5a;
+    border-radius: 6px;
+    padding: 8px 10px;
+    margin-bottom: 6px;
+  }
+  .ask-question .option-label {
+    font-weight: 600;
+    font-size: 13px;
+    color: #c0c0e0;
+  }
+  .ask-question .option-desc {
+    font-size: 12px;
+    color: #8888aa;
+    margin-top: 2px;
+  }
 </style>
 </head>
 <body>
@@ -224,6 +258,28 @@ function escapeHtml(s) {
   return d.innerHTML;
 }
 
+function renderAskQuestion(input) {
+  let html = '';
+  const questions = input.questions || [];
+  questions.forEach(q => {
+    html += '<div class="ask-question">';
+    if (q.header) {
+      html += '<div class="question-header">' + escapeHtml(q.header) + '</div>';
+    }
+    html += '<div class="question-text">' + escapeHtml(q.question) + '</div>';
+    (q.options || []).forEach((opt, i) => {
+      html += '<div class="option">';
+      html += '<div class="option-label">' + (i + 1) + '. ' + escapeHtml(opt.label) + '</div>';
+      if (opt.description) {
+        html += '<div class="option-desc">' + escapeHtml(opt.description) + '</div>';
+      }
+      html += '</div>';
+    });
+    html += '</div>';
+  });
+  return html;
+}
+
 function loadTranscript() {
   fetch(apiBase + '/api/sessions/' + sessionId + '/transcript')
     .then(r => r.json())
@@ -237,7 +293,9 @@ function loadTranscript() {
         const cls = msg.role === 'user' ? 'user' : 'assistant';
         let content = '';
         (msg.blocks || []).forEach(b => {
-          if (b.type === 'tool_use') {
+          if (b.type === 'tool_use' && b.text === 'AskUserQuestion' && b.input) {
+            content += renderAskQuestion(b.input);
+          } else if (b.type === 'tool_use') {
             content += '<div class="tool-use">' + escapeHtml(b.text) + '</div>';
           } else {
             content += escapeHtml(b.text);

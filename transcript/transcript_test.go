@@ -1,6 +1,7 @@
 package transcript
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -189,6 +190,46 @@ func TestReadMixedConversation(t *testing.T) {
 	}
 	if tr.Messages[3].Role != "assistant" || tr.Messages[3].Blocks[0].Text != "Found the issue." {
 		t.Errorf("msg 3: %+v", tr.Messages[3])
+	}
+}
+
+func TestReadAskUserQuestionPreservesInput(t *testing.T) {
+	jsonl := `{"type":"assistant","timestamp":"2026-01-01T00:00:01.000Z","message":{"role":"assistant","content":[{"type":"text","text":"I have a question."},{"type":"tool_use","id":"t1","name":"AskUserQuestion","input":{"questions":[{"question":"Which approach?","header":"Approach","options":[{"label":"Option A","description":"First option"},{"label":"Option B","description":"Second option"}],"multiSelect":false}]}}]}}` + "\n"
+
+	tr := readFromString(t, jsonl)
+	if len(tr.Messages) != 1 {
+		t.Fatalf("got %d messages, want 1", len(tr.Messages))
+	}
+	m := tr.Messages[0]
+	if len(m.Blocks) != 2 {
+		t.Fatalf("got %d blocks, want 2", len(m.Blocks))
+	}
+	if m.Blocks[1].Type != "tool_use" || m.Blocks[1].Text != "AskUserQuestion" {
+		t.Errorf("block 1 = %+v", m.Blocks[1])
+	}
+	if m.Blocks[1].Input == nil {
+		t.Fatal("AskUserQuestion input should be preserved")
+	}
+	// Verify the input contains the question data
+	var input map[string]interface{}
+	if err := json.Unmarshal(m.Blocks[1].Input, &input); err != nil {
+		t.Fatalf("failed to parse input: %v", err)
+	}
+	questions, ok := input["questions"].([]interface{})
+	if !ok || len(questions) != 1 {
+		t.Errorf("expected 1 question, got %v", input["questions"])
+	}
+}
+
+func TestReadRegularToolUseOmitsInput(t *testing.T) {
+	jsonl := `{"type":"assistant","timestamp":"2026-01-01T00:00:01.000Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Read","input":{"file_path":"/foo"}}]}}` + "\n"
+
+	tr := readFromString(t, jsonl)
+	if len(tr.Messages) != 1 {
+		t.Fatalf("got %d messages, want 1", len(tr.Messages))
+	}
+	if tr.Messages[0].Blocks[0].Input != nil {
+		t.Error("regular tool_use should not have input preserved")
 	}
 }
 
