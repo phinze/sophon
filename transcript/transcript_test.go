@@ -14,6 +14,7 @@ func TestCwdToSlug(t *testing.T) {
 		{"/home/phinze/foo", "-home-phinze-foo"},
 		{"/", "-"},
 		{"/a/b/c", "-a-b-c"},
+		{"/home/phinze/src/github.com/phinze/sophon", "-home-phinze-src-github-com-phinze-sophon"},
 	}
 	for _, tt := range tests {
 		got := cwdToSlug(tt.cwd)
@@ -24,8 +25,8 @@ func TestCwdToSlug(t *testing.T) {
 }
 
 func TestTranscriptPath(t *testing.T) {
-	got := TranscriptPath("/home/user/.claude", "/home/user/project", "abc-123")
-	want := "/home/user/.claude/projects/-home-user-project/abc-123.jsonl"
+	got := TranscriptPath("/home/user/.claude", "/home/user/src/github.com/org/project", "abc-123")
+	want := "/home/user/.claude/projects/-home-user-src-github-com-org-project/abc-123.jsonl"
 	if got != want {
 		t.Errorf("TranscriptPath = %q, want %q", got, want)
 	}

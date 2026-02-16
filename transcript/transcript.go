@@ -35,7 +35,9 @@ func TranscriptPath(claudeDir, cwd, sessionID string) string {
 }
 
 func cwdToSlug(cwd string) string {
-	return strings.ReplaceAll(cwd, "/", "-")
+	slug := strings.ReplaceAll(cwd, "/", "-")
+	slug = strings.ReplaceAll(slug, ".", "-")
+	return slug
 }
 
 // Read parses a Claude Code JSONL transcript file and returns displayable messages.
