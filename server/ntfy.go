@@ -57,6 +57,11 @@ func (s *Server) sendStopNotification(sess *store.Session, mins int) {
 
 	title := fmt.Sprintf("[%s] Session complete", sess.Project)
 	body := fmt.Sprintf("Finished after %dm", mins)
+	if sess.NotifyMessage != "" {
+		body += "\n" + sess.NotifyMessage
+	}
+
+	clickURL := fmt.Sprintf("%s/sophon/respond/%s", strings.TrimRight(s.cfg.BaseURL, "/"), sess.ID)
 
 	req, err := http.NewRequest("POST", s.cfg.NtfyURL, strings.NewReader(body))
 	if err != nil {
@@ -66,6 +71,7 @@ func (s *Server) sendStopNotification(sess *store.Session, mins int) {
 	req.Header.Set("Title", title)
 	req.Header.Set("Priority", "default")
 	req.Header.Set("Tags", "white_check_mark")
+	req.Header.Set("Click", clickURL)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {

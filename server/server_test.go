@@ -267,3 +267,49 @@ func TestLastActivityUpdatedOnRespond(t *testing.T) {
 		t.Errorf("LastActivityAt not updated on respond: %v", sess.LastActivityAt)
 	}
 }
+
+func TestStopNotifyIncludesLastMessage(t *testing.T) {
+	h := newTestHarness(t)
+	h.createSession(t, "s1", "%5", "/home/user/project")
+	h.focused = false
+
+	// Simulate a notification, then stop
+	h.notify(t, "s1", "permission_prompt", "Allow Bash: git status")
+	h.ntfyReqs = nil // reset so we only capture the stop notification
+	h.ntfyBodies = nil
+
+	sess, _ := h.store.GetSession("s1")
+	sess.LastActivityAt = time.Now().Add(-8 * time.Minute)
+	h.store.UpdateSession(sess)
+
+	h.stopSession(t, "s1")
+
+	if h.ntfyCount() != 1 {
+		t.Fatalf("expected 1 ntfy request, got %d", h.ntfyCount())
+	}
+	want := "Finished after 8m\nAllow Bash: git status"
+	if h.ntfyBodies[0] != want {
+		t.Errorf("stop body = %q, want %q", h.ntfyBodies[0], want)
+	}
+}
+
+func TestStopNotifyHasClickURL(t *testing.T) {
+	h := newTestHarness(t)
+	h.createSession(t, "s1", "%5", "/home/user/project")
+	h.focused = false
+
+	sess, _ := h.store.GetSession("s1")
+	sess.LastActivityAt = time.Now().Add(-10 * time.Minute)
+	h.store.UpdateSession(sess)
+
+	h.stopSession(t, "s1")
+
+	if h.ntfyCount() != 1 {
+		t.Fatalf("expected 1 ntfy request, got %d", h.ntfyCount())
+	}
+	click := h.ntfyReqs[0].Header.Get("Click")
+	want := "https://example.com/sophon/respond/s1"
+	if click != want {
+		t.Errorf("Click = %q, want %q", click, want)
+	}
+}
