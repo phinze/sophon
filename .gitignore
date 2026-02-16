@@ -1,5 +1,6 @@
 /sophon
 /result
+/vendor
 server/static/*.js
 server/static/*.css
 server/static/*.map
