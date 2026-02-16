@@ -61,7 +61,7 @@ in
     minSessionAge = mkOption {
       type = types.int;
       default = 120;
-      description = "Minimum session age in seconds before Stop sends a completion notification.";
+      description = "Minimum seconds since last activity before a turn-end sends a completion notification.";
     };
 
     daemon = {

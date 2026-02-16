@@ -32,7 +32,7 @@ type Config struct {
 	Port          int
 	NtfyURL       string
 	BaseURL       string
-	MinSessionAge int // seconds before Stop sends notification
+	MinSessionAge int // seconds since last activity before turn-end sends notification
 }
 
 // NodeOps abstracts per-node operations that may be proxied to a remote agent.
@@ -120,6 +120,7 @@ func (s *Server) Run() error {
 	// API routes
 	mux.HandleFunc("POST /api/sessions", s.handleCreateSession)
 	mux.HandleFunc("POST /api/sessions/{id}/notify", s.handleNotify)
+	mux.HandleFunc("POST /api/sessions/{id}/activity", s.handleActivity)
 	mux.HandleFunc("DELETE /api/sessions/{id}", s.handleDeleteSession)
 	mux.HandleFunc("POST /api/respond/{id}", s.handleRespond)
 	mux.HandleFunc("GET /api/sessions/{id}/transcript", s.handleTranscript)
@@ -209,11 +210,6 @@ func (s *Server) handleNotify(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	} else {
-		// Revive stopped sessions
-		if !sess.StoppedAt.IsZero() {
-			s.logger.Info("reviving stopped session", "session_id", id, "stopped_for", time.Since(sess.StoppedAt).Round(time.Second), "notification_type", req.NotificationType)
-			sess.StoppedAt = time.Time{}
-		}
 		// Backfill project/cwd/node_name if missing
 		if sess.Project == "" && req.Cwd != "" {
 			sess.Cwd = req.Cwd
@@ -248,7 +244,10 @@ func (s *Server) handleNotify(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
+// handleActivity records a turn completion (Stop hook) and optionally sends a
+// notification.  It does NOT mark the session as stopped — that only happens on
+// SessionEnd via handleDeleteSession.
+func (s *Server) handleActivity(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 
 	sess, err := s.store.GetSession(id)
@@ -262,13 +261,6 @@ func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
 	}
 
 	now := time.Now()
-	sess.StoppedAt = now
-
-	if err := s.store.UpdateSession(sess); err != nil {
-		s.logger.Error("failed to update session", "error", err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
 
 	// Duration = time since last meaningful activity (not total session age)
 	activityRef := sess.LastActivityAt
@@ -277,9 +269,16 @@ func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
 	}
 	elapsed := now.Sub(activityRef)
 
+	sess.LastActivityAt = now
+	if err := s.store.UpdateSession(sess); err != nil {
+		s.logger.Error("failed to update session", "error", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
 	if int(elapsed.Seconds()) >= s.cfg.MinSessionAge {
 		if s.nodeOps.PaneFocused(sess.NodeName, sess.TmuxPane) {
-			s.logger.Info("stop notification suppressed (pane focused)", "session_id", id)
+			s.logger.Info("turn-end notification suppressed (pane focused)", "session_id", id)
 		} else {
 			mins := int(elapsed.Minutes())
 			tr, _ := s.nodeOps.ReadTranscript(sess.NodeName, sess.ID, sess.Cwd)
@@ -287,8 +286,32 @@ func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
 			s.sendStopNotification(sess, mins, lastText)
 		}
 	}
-	s.logger.Info("session stopped", "session_id", id, "work_duration", elapsed.Round(time.Second))
+	s.logger.Info("turn ended", "session_id", id, "elapsed_since_last_activity", elapsed.Round(time.Second))
 
+	w.WriteHeader(http.StatusOK)
+}
+
+func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+
+	sess, err := s.store.GetSession(id)
+	if errors.Is(err, store.ErrNotFound) {
+		w.WriteHeader(http.StatusOK)
+		return
+	} else if err != nil {
+		s.logger.Error("failed to get session", "error", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	sess.StoppedAt = time.Now()
+	if err := s.store.UpdateSession(sess); err != nil {
+		s.logger.Error("failed to update session", "error", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	s.logger.Info("session ended", "session_id", id)
 	w.WriteHeader(http.StatusOK)
 }
 

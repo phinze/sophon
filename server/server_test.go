@@ -114,7 +114,17 @@ func (h *testHarness) notify(t *testing.T, id, notifType, message string) int {
 	return w.Code
 }
 
-func (h *testHarness) stopSession(t *testing.T, id string) int {
+func (h *testHarness) turnEnd(t *testing.T, id string) int {
+	t.Helper()
+	body, _ := json.Marshal(map[string]string{"node_name": "test-node"})
+	req := httptest.NewRequest("POST", "/api/sessions/"+id+"/activity", bytes.NewReader(body))
+	req.SetPathValue("id", id)
+	w := httptest.NewRecorder()
+	h.server.handleActivity(w, req)
+	return w.Code
+}
+
+func (h *testHarness) endSession(t *testing.T, id string) int {
 	t.Helper()
 	req := httptest.NewRequest("DELETE", "/api/sessions/"+id, nil)
 	req.SetPathValue("id", id)
@@ -154,7 +164,7 @@ func TestNotifySuppressedWhenPaneFocused(t *testing.T) {
 	}
 }
 
-func TestStopNotifySendsWhenPaneNotFocused(t *testing.T) {
+func TestTurnEndNotifySendsWhenPaneNotFocused(t *testing.T) {
 	h := newTestHarness(t)
 	h.createSession(t, "s1", "%5", "/home/user/project")
 	h.mockOps.focused = false
@@ -164,7 +174,7 @@ func TestStopNotifySendsWhenPaneNotFocused(t *testing.T) {
 	sess.LastActivityAt = time.Now().Add(-10 * time.Minute)
 	h.store.UpdateSession(sess)
 
-	h.stopSession(t, "s1")
+	h.turnEnd(t, "s1")
 
 	if h.ntfyCount() != 1 {
 		t.Fatalf("expected 1 ntfy request, got %d", h.ntfyCount())
@@ -172,9 +182,15 @@ func TestStopNotifySendsWhenPaneNotFocused(t *testing.T) {
 	if h.ntfyReqs[0].Header.Get("Tags") != "white_check_mark" {
 		t.Errorf("expected stop notification tags, got %q", h.ntfyReqs[0].Header.Get("Tags"))
 	}
+
+	// Session should NOT be marked as stopped
+	sess, _ = h.store.GetSession("s1")
+	if !sess.StoppedAt.IsZero() {
+		t.Errorf("StoppedAt should be zero after turn end, got %v", sess.StoppedAt)
+	}
 }
 
-func TestStopNotifySuppressedWhenPaneFocused(t *testing.T) {
+func TestTurnEndNotifySuppressedWhenPaneFocused(t *testing.T) {
 	h := newTestHarness(t)
 	h.createSession(t, "s1", "%5", "/home/user/project")
 	h.mockOps.focused = true
@@ -183,14 +199,14 @@ func TestStopNotifySuppressedWhenPaneFocused(t *testing.T) {
 	sess.LastActivityAt = time.Now().Add(-10 * time.Minute)
 	h.store.UpdateSession(sess)
 
-	h.stopSession(t, "s1")
+	h.turnEnd(t, "s1")
 
 	if h.ntfyCount() != 0 {
 		t.Fatalf("expected 0 ntfy requests when focused, got %d", h.ntfyCount())
 	}
 }
 
-func TestStopDurationUsesLastActivity(t *testing.T) {
+func TestTurnEndDurationUsesLastActivity(t *testing.T) {
 	h := newTestHarness(t)
 	h.createSession(t, "s1", "%5", "/home/user/project")
 	h.mockOps.focused = false
@@ -201,7 +217,7 @@ func TestStopDurationUsesLastActivity(t *testing.T) {
 	sess.LastActivityAt = time.Now().Add(-8 * time.Minute)
 	h.store.UpdateSession(sess)
 
-	h.stopSession(t, "s1")
+	h.turnEnd(t, "s1")
 
 	if h.ntfyCount() != 1 {
 		t.Fatalf("expected 1 ntfy request, got %d", h.ntfyCount())
@@ -213,7 +229,7 @@ func TestStopDurationUsesLastActivity(t *testing.T) {
 	}
 }
 
-func TestStopSuppressedWhenTooYoung(t *testing.T) {
+func TestTurnEndSuppressedWhenTooYoung(t *testing.T) {
 	h := newTestHarness(t)
 	h.createSession(t, "s1", "%5", "/home/user/project")
 	h.mockOps.focused = false
@@ -223,10 +239,41 @@ func TestStopSuppressedWhenTooYoung(t *testing.T) {
 	sess.LastActivityAt = time.Now().Add(-30 * time.Second)
 	h.store.UpdateSession(sess)
 
-	h.stopSession(t, "s1")
+	h.turnEnd(t, "s1")
 
 	if h.ntfyCount() != 0 {
 		t.Fatalf("expected 0 ntfy requests for young session, got %d", h.ntfyCount())
+	}
+}
+
+func TestSessionEndSetsStoppedAt(t *testing.T) {
+	h := newTestHarness(t)
+	h.createSession(t, "s1", "%5", "/home/user/project")
+
+	h.endSession(t, "s1")
+
+	sess, err := h.store.GetSession("s1")
+	if err != nil {
+		t.Fatalf("GetSession: %v", err)
+	}
+	if sess.StoppedAt.IsZero() {
+		t.Error("StoppedAt should be set after session end")
+	}
+}
+
+func TestSessionEndDoesNotNotify(t *testing.T) {
+	h := newTestHarness(t)
+	h.createSession(t, "s1", "%5", "/home/user/project")
+	h.mockOps.focused = false
+
+	sess, _ := h.store.GetSession("s1")
+	sess.LastActivityAt = time.Now().Add(-10 * time.Minute)
+	h.store.UpdateSession(sess)
+
+	h.endSession(t, "s1")
+
+	if h.ntfyCount() != 0 {
+		t.Fatalf("expected 0 ntfy requests on session end, got %d", h.ntfyCount())
 	}
 }
 
@@ -292,21 +339,21 @@ func TestLastActivityUpdatedOnRespond(t *testing.T) {
 	}
 }
 
-func TestStopNotifyIncludesLastMessage(t *testing.T) {
+func TestTurnEndNotifyIncludesLastMessage(t *testing.T) {
 	h := newTestHarness(t)
 	h.createSession(t, "s1", "%5", "/home/user/project")
 	h.mockOps.focused = false
 
-	// Simulate a notification, then stop
+	// Simulate a notification, then turn end
 	h.notify(t, "s1", "permission_prompt", "Allow Bash: git status")
-	h.ntfyReqs = nil // reset so we only capture the stop notification
+	h.ntfyReqs = nil // reset so we only capture the turn-end notification
 	h.ntfyBodies = nil
 
 	sess, _ := h.store.GetSession("s1")
 	sess.LastActivityAt = time.Now().Add(-8 * time.Minute)
 	h.store.UpdateSession(sess)
 
-	h.stopSession(t, "s1")
+	h.turnEnd(t, "s1")
 
 	if h.ntfyCount() != 1 {
 		t.Fatalf("expected 1 ntfy request, got %d", h.ntfyCount())
@@ -317,7 +364,7 @@ func TestStopNotifyIncludesLastMessage(t *testing.T) {
 	}
 }
 
-func TestStopNotifyHasClickURL(t *testing.T) {
+func TestTurnEndNotifyHasClickURL(t *testing.T) {
 	h := newTestHarness(t)
 	h.createSession(t, "s1", "%5", "/home/user/project")
 	h.mockOps.focused = false
@@ -326,7 +373,7 @@ func TestStopNotifyHasClickURL(t *testing.T) {
 	sess.LastActivityAt = time.Now().Add(-10 * time.Minute)
 	h.store.UpdateSession(sess)
 
-	h.stopSession(t, "s1")
+	h.turnEnd(t, "s1")
 
 	if h.ntfyCount() != 1 {
 		t.Fatalf("expected 1 ntfy request, got %d", h.ntfyCount())
@@ -409,7 +456,7 @@ func TestTranscriptEndpointWithData(t *testing.T) {
 	}
 }
 
-func TestStopNotifyUsesTranscriptText(t *testing.T) {
+func TestTurnEndNotifyUsesTranscriptText(t *testing.T) {
 	h := newTestHarness(t)
 	h.mockOps.focused = false
 
@@ -432,7 +479,7 @@ func TestStopNotifyUsesTranscriptText(t *testing.T) {
 	sess.LastActivityAt = time.Now().Add(-8 * time.Minute)
 	h.store.UpdateSession(sess)
 
-	h.stopSession(t, sessionID)
+	h.turnEnd(t, sessionID)
 
 	if h.ntfyCount() != 1 {
 		t.Fatalf("expected 1 ntfy request, got %d", h.ntfyCount())

@@ -49,7 +49,9 @@ func Run(cfg Config) error {
 	case "Notification":
 		return handleNotification(cfg, event)
 	case "Stop":
-		return handleStop(cfg, event)
+		return handleTurnEnd(cfg, event)
+	case "SessionEnd":
+		return handleSessionEnd(cfg, event)
 	default:
 		// Unknown event, ignore
 		return nil
@@ -93,7 +95,19 @@ func handleNotification(cfg Config, event HookEvent) error {
 	return nil
 }
 
-func handleStop(cfg Config, event HookEvent) error {
+func handleTurnEnd(cfg Config, event HookEvent) error {
+	body := map[string]interface{}{
+		"node_name": cfg.NodeName,
+	}
+	err := postJSON(cfg.DaemonURL+"/api/sessions/"+event.SessionID+"/activity", body)
+	if err != nil {
+		// Daemon down, nothing to do for turn end
+		return nil
+	}
+	return nil
+}
+
+func handleSessionEnd(cfg Config, event HookEvent) error {
 	client := &http.Client{Timeout: 5 * time.Second}
 	url := cfg.DaemonURL + "/api/sessions/" + event.SessionID
 	if cfg.NodeName != "" {
@@ -105,7 +119,7 @@ func handleStop(cfg Config, event HookEvent) error {
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		// Daemon down, nothing to do for stop
+		// Daemon down, nothing to do for session end
 		return nil
 	}
 	resp.Body.Close()
