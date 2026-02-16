@@ -103,6 +103,13 @@ in
         description = "Port for the sophon agent to listen on.";
       };
 
+      advertiseUrl = mkOption {
+        type = types.str;
+        default = "";
+        description = "URL the daemon should use to reach this agent. Also determines the listen address (binds to the URL's hostname). When empty, defaults to http://127.0.0.1:<port>.";
+        example = "http://phinze-mrn-mbp.swallow-galaxy.ts.net:2588";
+      };
+
       autoStart = mkOption {
         type = types.bool;
         default = true;
@@ -171,14 +178,14 @@ in
 
       Service = {
         Type = "simple";
-        ExecStart = concatStringsSep " " [
+        ExecStart = concatStringsSep " " ([
           "${cfg.package}/bin/sophon"
           "agent"
           "--port ${toString cfg.agent.port}"
           "--daemon-url ${cfg.daemonUrl}"
           "--node-name ${cfg.nodeName}"
           "--log-level ${cfg.agent.logLevel}"
-        ];
+        ] ++ optional (cfg.agent.advertiseUrl != "") "--advertise-url ${cfg.agent.advertiseUrl}");
         Restart = "on-failure";
         RestartSec = "5s";
 
@@ -208,7 +215,7 @@ in
             "--daemon-url" cfg.daemonUrl
             "--node-name" cfg.nodeName
             "--log-level" cfg.agent.logLevel
-          ];
+          ] ++ optionals (cfg.agent.advertiseUrl != "") [ "--advertise-url" cfg.agent.advertiseUrl ];
           KeepAlive = true;
           RunAtLoad = true;
           StandardOutPath = "/tmp/sophon-agent.log";

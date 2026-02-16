@@ -12,6 +12,7 @@ import (
 func runAgent(args []string) error {
 	fs := flag.NewFlagSet("agent", flag.ExitOnError)
 	port := fs.Int("port", 2588, "listen port")
+	advertiseURL := fs.String("advertise-url", "", "URL the daemon should use to reach this agent; also sets listen address (default: http://127.0.0.1:<port>)")
 	daemonURL := fs.String("daemon-url", "", "sophon daemon URL for registration")
 	claudeDir := fs.String("claude-dir", defaultClaudeDir(), "Claude Code config directory")
 	nodeName := fs.String("node-name", defaultNodeName(), "node name for this machine")
@@ -47,10 +48,11 @@ func runAgent(args []string) error {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
 
 	cfg := agent.Config{
-		Port:      *port,
-		DaemonURL: *daemonURL,
-		ClaudeDir: *claudeDir,
-		NodeName:  *nodeName,
+		Port:         *port,
+		AdvertiseURL: *advertiseURL,
+		DaemonURL:    *daemonURL,
+		ClaudeDir:    *claudeDir,
+		NodeName:     *nodeName,
 	}
 
 	a := agent.New(cfg, logger)

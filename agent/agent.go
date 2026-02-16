@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/phinze/sophon/tmux"
@@ -14,10 +15,11 @@ import (
 
 // Config holds agent configuration.
 type Config struct {
-	Port      int
-	DaemonURL string
-	ClaudeDir string
-	NodeName  string
+	Port         int
+	AdvertiseURL string // URL the daemon should use to reach this agent
+	DaemonURL    string
+	ClaudeDir    string
+	NodeName     string
 }
 
 // Agent is the per-node agent HTTP server.
@@ -50,7 +52,7 @@ func (a *Agent) Run() error {
 	mux.HandleFunc("GET /api/pane-focused", a.handlePaneFocused)
 	mux.HandleFunc("GET /api/health", a.handleHealth)
 
-	addr := fmt.Sprintf("127.0.0.1:%d", a.cfg.Port)
+	addr := fmt.Sprintf("%s:%d", a.listenHost(), a.cfg.Port)
 	a.logger.Info("starting sophon agent", "addr", addr, "node", a.cfg.NodeName)
 	return http.ListenAndServe(addr, mux)
 }
@@ -102,6 +104,18 @@ func (a *Agent) handleHealth(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintln(w, "ok")
 }
 
+// listenHost returns the host to bind to. When an advertise URL is configured,
+// it extracts the hostname so the agent listens on that interface (e.g. a
+// Tailscale address) rather than 0.0.0.0. Falls back to 127.0.0.1.
+func (a *Agent) listenHost() string {
+	if a.cfg.AdvertiseURL != "" {
+		if u, err := url.Parse(a.cfg.AdvertiseURL); err == nil && u.Hostname() != "" {
+			return u.Hostname()
+		}
+	}
+	return "127.0.0.1"
+}
+
 // heartbeat registers with the daemon periodically.
 func (a *Agent) heartbeat() {
 	a.register()
@@ -117,9 +131,14 @@ func (a *Agent) register() {
 		return
 	}
 
+	agentURL := a.cfg.AdvertiseURL
+	if agentURL == "" {
+		agentURL = fmt.Sprintf("http://127.0.0.1:%d", a.cfg.Port)
+	}
+
 	body, _ := json.Marshal(map[string]string{
 		"node_name": a.cfg.NodeName,
-		"url":       fmt.Sprintf("http://127.0.0.1:%d", a.cfg.Port),
+		"url":       agentURL,
 	})
 
 	client := &http.Client{Timeout: 5 * time.Second}
