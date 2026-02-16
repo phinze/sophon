@@ -35,14 +35,20 @@ type Server struct {
 	cfg   Config
 	store *store.Store
 	logger *slog.Logger
+
+	// Injectable for testing
+	paneFocused func(pane string) bool
+	sendKeys    func(pane, text string) error
 }
 
 // New creates a new Server.
 func New(cfg Config, st *store.Store, logger *slog.Logger) *Server {
 	return &Server{
-		cfg:   cfg,
-		store: st,
-		logger: logger,
+		cfg:         cfg,
+		store:       st,
+		logger:      logger,
+		paneFocused: tmuxPaneFocused,
+		sendKeys:    tmuxSendKeys,
 	}
 }
 
@@ -88,12 +94,14 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 
 	project := store.ProjectFromCwd(req.Cwd)
 
+	now := time.Now()
 	sess := &store.Session{
-		ID:        req.SessionID,
-		TmuxPane:  req.TmuxPane,
-		Cwd:       req.Cwd,
-		Project:   project,
-		StartedAt: time.Now(),
+		ID:             req.SessionID,
+		TmuxPane:       req.TmuxPane,
+		Cwd:            req.Cwd,
+		Project:        project,
+		StartedAt:      now,
+		LastActivityAt: now,
 	}
 
 	if err := s.store.CreateSession(sess); err != nil {
@@ -146,10 +154,12 @@ func (s *Server) handleNotify(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	now := time.Now()
 	sess.NotificationType = req.NotificationType
 	sess.NotifyTitle = req.Title
 	sess.NotifyMessage = req.Message
-	sess.NotifiedAt = time.Now()
+	sess.NotifiedAt = now
+	sess.LastActivityAt = now
 
 	if err := s.store.CreateSession(sess); err != nil {
 		s.logger.Error("failed to save session", "error", err)
@@ -157,8 +167,12 @@ func (s *Server) handleNotify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Send ntfy notification
-	s.sendNotification(sess, req.NotificationType, req.Message)
+	// Only push if the user isn't already looking at the pane
+	if s.paneFocused(sess.TmuxPane) {
+		s.logger.Info("notification suppressed (pane focused)", "session_id", id, "type", req.NotificationType)
+	} else {
+		s.sendNotification(sess, req.NotificationType, req.Message)
+	}
 
 	s.logger.Info("notification stored", "session_id", id, "type", req.NotificationType)
 	w.WriteHeader(http.StatusOK)
@@ -177,19 +191,31 @@ func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sess.StoppedAt = time.Now()
+	now := time.Now()
+	sess.StoppedAt = now
+
 	if err := s.store.UpdateSession(sess); err != nil {
 		s.logger.Error("failed to update session", "error", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 
-	elapsed := time.Since(sess.StartedAt)
-	if int(elapsed.Seconds()) >= s.cfg.MinSessionAge {
-		mins := int(elapsed.Minutes())
-		s.sendStopNotification(sess, mins)
+	// Duration = time since last meaningful activity (not total session age)
+	activityRef := sess.LastActivityAt
+	if activityRef.IsZero() {
+		activityRef = sess.StartedAt
 	}
-	s.logger.Info("session stopped", "session_id", id, "duration", elapsed.Round(time.Second))
+	elapsed := now.Sub(activityRef)
+
+	if int(elapsed.Seconds()) >= s.cfg.MinSessionAge {
+		if s.paneFocused(sess.TmuxPane) {
+			s.logger.Info("stop notification suppressed (pane focused)", "session_id", id)
+		} else {
+			mins := int(elapsed.Minutes())
+			s.sendStopNotification(sess, mins)
+		}
+	}
+	s.logger.Info("session stopped", "session_id", id, "work_duration", elapsed.Round(time.Second))
 
 	w.WriteHeader(http.StatusOK)
 }
@@ -249,10 +275,16 @@ func (s *Server) handleRespond(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := tmuxSendKeys(sess.TmuxPane, req.Text); err != nil {
+	if err := s.sendKeys(sess.TmuxPane, req.Text); err != nil {
 		s.logger.Error("tmux send-keys failed", "error", err, "pane", sess.TmuxPane)
 		http.Error(w, "failed to send response: "+err.Error(), http.StatusInternalServerError)
 		return
+	}
+
+	// User responding = new activity; update timestamp so next stop duration is accurate
+	sess.LastActivityAt = time.Now()
+	if err := s.store.UpdateSession(sess); err != nil {
+		s.logger.Error("failed to update last activity", "error", err)
 	}
 
 	s.logger.Info("response sent", "session_id", id, "pane", sess.TmuxPane, "text_len", len(req.Text))

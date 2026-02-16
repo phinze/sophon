@@ -10,19 +10,20 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const currentSchemaVersion = 1
+const currentSchemaVersion = 2
 
 // ErrNotFound is returned when a session is not found.
 var ErrNotFound = errors.New("session not found")
 
 // Session represents a Claude Code session.
 type Session struct {
-	ID        string    `json:"session_id"`
-	TmuxPane  string    `json:"tmux_pane"`
-	Cwd       string    `json:"cwd"`
-	Project   string    `json:"project"`
-	StartedAt time.Time `json:"started_at"`
-	StoppedAt time.Time `json:"stopped_at,omitempty"` // zero means active
+	ID             string    `json:"session_id"`
+	TmuxPane       string    `json:"tmux_pane"`
+	Cwd            string    `json:"cwd"`
+	Project        string    `json:"project"`
+	StartedAt      time.Time `json:"started_at"`
+	StoppedAt      time.Time `json:"stopped_at,omitempty"`      // zero means active
+	LastActivityAt time.Time `json:"last_activity_at,omitempty"` // tracks last meaningful event
 
 	// Latest notification context
 	NotificationType string    `json:"notification_type,omitempty"`
@@ -93,6 +94,16 @@ func (s *Store) migrate() error {
 		version = 1
 	}
 
+	if version < 2 {
+		if _, err := s.db.Exec(`ALTER TABLE sessions ADD COLUMN last_activity_at TEXT`); err != nil {
+			// Column may already exist if migration was partially applied
+			if !strings.Contains(err.Error(), "duplicate column") {
+				return err
+			}
+		}
+		version = 2
+	}
+
 	// Upsert the version
 	if _, err := s.db.Exec(`DELETE FROM schema_version`); err != nil {
 		return err
@@ -106,10 +117,11 @@ func (s *Store) migrate() error {
 // CreateSession inserts or replaces a session.
 func (s *Store) CreateSession(sess *Session) error {
 	_, err := s.db.Exec(`INSERT OR REPLACE INTO sessions
-		(id, tmux_pane, cwd, project, started_at, stopped_at, notification_type, notify_title, notify_message, notified_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		(id, tmux_pane, cwd, project, started_at, stopped_at, last_activity_at, notification_type, notify_title, notify_message, notified_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		sess.ID, sess.TmuxPane, sess.Cwd, sess.Project,
 		formatTime(sess.StartedAt), formatNullableTime(sess.StoppedAt),
+		formatNullableTime(sess.LastActivityAt),
 		sess.NotificationType, sess.NotifyTitle, sess.NotifyMessage,
 		formatNullableTime(sess.NotifiedAt),
 	)
@@ -118,7 +130,7 @@ func (s *Store) CreateSession(sess *Session) error {
 
 // GetSession retrieves a session by ID. Returns ErrNotFound if not found.
 func (s *Store) GetSession(id string) (*Session, error) {
-	row := s.db.QueryRow(`SELECT id, tmux_pane, cwd, project, started_at, stopped_at,
+	row := s.db.QueryRow(`SELECT id, tmux_pane, cwd, project, started_at, stopped_at, last_activity_at,
 		notification_type, notify_title, notify_message, notified_at
 		FROM sessions WHERE id = ?`, id)
 	sess, err := scanSession(row)
@@ -131,11 +143,12 @@ func (s *Store) GetSession(id string) (*Session, error) {
 // UpdateSession updates an existing session by ID.
 func (s *Store) UpdateSession(sess *Session) error {
 	result, err := s.db.Exec(`UPDATE sessions SET
-		tmux_pane = ?, cwd = ?, project = ?, started_at = ?, stopped_at = ?,
+		tmux_pane = ?, cwd = ?, project = ?, started_at = ?, stopped_at = ?, last_activity_at = ?,
 		notification_type = ?, notify_title = ?, notify_message = ?, notified_at = ?
 		WHERE id = ?`,
 		sess.TmuxPane, sess.Cwd, sess.Project,
 		formatTime(sess.StartedAt), formatNullableTime(sess.StoppedAt),
+		formatNullableTime(sess.LastActivityAt),
 		sess.NotificationType, sess.NotifyTitle, sess.NotifyMessage,
 		formatNullableTime(sess.NotifiedAt),
 		sess.ID,
@@ -177,7 +190,7 @@ func (s *Store) ReapStoppedSessions(ttl time.Duration) ([]string, error) {
 
 // ListActiveSessions returns sessions that haven't been stopped, newest first.
 func (s *Store) ListActiveSessions() ([]*Session, error) {
-	rows, err := s.db.Query(`SELECT id, tmux_pane, cwd, project, started_at, stopped_at,
+	rows, err := s.db.Query(`SELECT id, tmux_pane, cwd, project, started_at, stopped_at, last_activity_at,
 		notification_type, notify_title, notify_message, notified_at
 		FROM sessions WHERE stopped_at IS NULL ORDER BY started_at DESC`)
 	if err != nil {
@@ -189,7 +202,7 @@ func (s *Store) ListActiveSessions() ([]*Session, error) {
 
 // ListRecentSessions returns stopped sessions ordered by stopped_at DESC, limited to n.
 func (s *Store) ListRecentSessions(limit int) ([]*Session, error) {
-	rows, err := s.db.Query(`SELECT id, tmux_pane, cwd, project, started_at, stopped_at,
+	rows, err := s.db.Query(`SELECT id, tmux_pane, cwd, project, started_at, stopped_at, last_activity_at,
 		notification_type, notify_title, notify_message, notified_at
 		FROM sessions WHERE stopped_at IS NOT NULL ORDER BY stopped_at DESC LIMIT ?`, limit)
 	if err != nil {
@@ -223,11 +236,11 @@ type scanner interface {
 func scanSession(s scanner) (*Session, error) {
 	var sess Session
 	var startedAt string
-	var stoppedAt, notifiedAt sql.NullString
+	var stoppedAt, lastActivityAt, notifiedAt sql.NullString
 
 	err := s.Scan(
 		&sess.ID, &sess.TmuxPane, &sess.Cwd, &sess.Project,
-		&startedAt, &stoppedAt,
+		&startedAt, &stoppedAt, &lastActivityAt,
 		&sess.NotificationType, &sess.NotifyTitle, &sess.NotifyMessage,
 		&notifiedAt,
 	)
@@ -243,6 +256,12 @@ func scanSession(s scanner) (*Session, error) {
 		sess.StoppedAt, err = parseTime(stoppedAt.String)
 		if err != nil {
 			return nil, fmt.Errorf("parsing stopped_at: %w", err)
+		}
+	}
+	if lastActivityAt.Valid {
+		sess.LastActivityAt, err = parseTime(lastActivityAt.String)
+		if err != nil {
+			return nil, fmt.Errorf("parsing last_activity_at: %w", err)
 		}
 	}
 	if notifiedAt.Valid {

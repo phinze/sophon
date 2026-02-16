@@ -97,7 +97,7 @@
         <span class="project-name">{{.Project}}</span>
       </div>
       <div class="card-detail">
-        Started {{timeAgo .StartedAt}}{{if .NotifyMessage}} · notified {{timeAgo .NotifiedAt}}{{end}}
+        Started {{timeAgo .StartedAt}}{{if not .LastActivityAt.IsZero}} · active {{timeAgo .LastActivityAt}}{{end}}{{if .NotifyMessage}} · notified {{timeAgo .NotifiedAt}}{{end}}
       </div>
       {{if .NotifyMessage}}
       <div class="card-message">{{.NotifyMessage}}</div>
