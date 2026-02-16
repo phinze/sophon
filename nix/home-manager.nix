@@ -200,7 +200,7 @@ in
       launchd.agents.sophon-agent = {
         enable = cfg.agent.autoStart;
         config = {
-          Label = "com.github.phinze.sophon-agent";
+          Label = "ph.inze.sophon-agent";
           ProgramArguments = [
             "${cfg.package}/bin/sophon"
             "agent"
