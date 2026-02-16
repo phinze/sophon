@@ -160,8 +160,8 @@ in
     };
     })
 
-    # When agent is enabled, run the per-node agent service
-    (mkIf cfg.agent.enable {
+    # When agent is enabled on Linux, run as systemd user service
+    (mkIf (cfg.agent.enable && pkgs.stdenv.isLinux) {
       systemd.user.services.sophon-agent = {
       Unit = {
         Description = "Sophon Agent - per-node transcript and tmux proxy";
@@ -193,6 +193,31 @@ in
         WantedBy = [ "default.target" ];
       };
     };
+    })
+
+    # When agent is enabled on macOS, run as launchd agent
+    (mkIf (cfg.agent.enable && pkgs.stdenv.isDarwin) {
+      launchd.agents.sophon-agent = {
+        enable = cfg.agent.autoStart;
+        config = {
+          Label = "com.github.phinze.sophon-agent";
+          ProgramArguments = [
+            "${cfg.package}/bin/sophon"
+            "agent"
+            "--port" (toString cfg.agent.port)
+            "--daemon-url" cfg.daemonUrl
+            "--node-name" cfg.nodeName
+            "--log-level" cfg.agent.logLevel
+          ];
+          KeepAlive = true;
+          RunAtLoad = true;
+          StandardOutPath = "/tmp/sophon-agent.log";
+          StandardErrorPath = "/tmp/sophon-agent.log";
+          EnvironmentVariables = {
+            PATH = "${pkgs.tmux}/bin:/usr/bin:/bin";
+          };
+        };
+      };
     })
   ]);
 }
