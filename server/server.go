@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"time"
@@ -16,6 +17,9 @@ import (
 
 //go:embed templates/*.html
 var templateFS embed.FS
+
+//go:embed all:static
+var staticFS embed.FS
 
 var tmpl = template.Must(
 	template.New("").Funcs(template.FuncMap{
@@ -68,6 +72,10 @@ func (s *Server) Run() error {
 	mux.HandleFunc("DELETE /api/sessions/{id}", s.handleDeleteSession)
 	mux.HandleFunc("POST /api/respond/{id}", s.handleRespond)
 	mux.HandleFunc("GET /api/sessions/{id}/transcript", s.handleTranscript)
+
+	// Static assets
+	staticSub, _ := fs.Sub(staticFS, "static")
+	mux.Handle("GET /sophon/static/", http.StripPrefix("/sophon/static/", http.FileServerFS(staticSub)))
 
 	// Web UI
 	mux.HandleFunc("GET /sophon/respond/{id}", s.handleRespondPage)

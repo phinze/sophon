@@ -16,7 +16,10 @@
       system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
-        sophon = pkgs.callPackage ./nix/package.nix { lastModifiedDate = self.lastModifiedDate; };
+        sophon = pkgs.callPackage ./nix/package.nix {
+          lastModifiedDate = self.lastModifiedDate;
+          buildNpmPackage = pkgs.buildNpmPackage;
+        };
       in
       {
         packages = {
@@ -34,6 +37,7 @@
             gopls
             gotools
             gnumake
+            nodejs
           ];
         };
       }

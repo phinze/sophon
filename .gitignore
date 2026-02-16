@@ -1,2 +1,6 @@
 /sophon
 /result
+server/static/*.js
+server/static/*.css
+server/static/*.map
+server/frontend/node_modules/
