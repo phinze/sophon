@@ -1,4 +1,4 @@
-package server
+package tmux
 
 import (
 	"fmt"
@@ -6,11 +6,11 @@ import (
 	"strings"
 )
 
-// tmuxPaneFocused checks whether a tmux pane is currently visible and active.
+// PaneFocused checks whether a tmux pane is currently visible and active.
 // Returns true only if the pane is the active pane in the active window of an
 // attached session — i.e., the user is looking at it right now.
 // Returns false on any error (pane gone, tmux not running, etc.).
-func tmuxPaneFocused(pane string) bool {
+func PaneFocused(pane string) bool {
 	if pane == "" {
 		return false
 	}
@@ -27,8 +27,8 @@ func tmuxPaneFocused(pane string) bool {
 	return fields[0] == "1" && fields[1] == "1" && fields[2] != "0"
 }
 
-// tmuxSendKeys sends text to a tmux pane followed by Enter.
-func tmuxSendKeys(pane, text string) error {
+// SendKeys sends text to a tmux pane followed by Enter.
+func SendKeys(pane, text string) error {
 	if pane == "" {
 		return fmt.Errorf("no tmux pane specified for session")
 	}

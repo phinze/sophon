@@ -24,6 +24,7 @@ type HookEvent struct {
 type Config struct {
 	DaemonURL     string
 	NtfyURL       string
+	NodeName      string
 	MinSessionAge int
 }
 
@@ -60,6 +61,7 @@ func handleSessionStart(cfg Config, event HookEvent, tmuxPane string) error {
 		"session_id": event.SessionID,
 		"tmux_pane":  tmuxPane,
 		"cwd":        event.Cwd,
+		"node_name":  cfg.NodeName,
 	}
 	return postJSON(cfg.DaemonURL+"/api/sessions", body)
 }
@@ -80,6 +82,7 @@ func handleNotification(cfg Config, event HookEvent) error {
 		"title":             title,
 		"message":           event.Message,
 		"cwd":               event.Cwd,
+		"node_name":         cfg.NodeName,
 	}
 
 	err := postJSON(cfg.DaemonURL+"/api/sessions/"+event.SessionID+"/notify", body)
@@ -92,7 +95,11 @@ func handleNotification(cfg Config, event HookEvent) error {
 
 func handleStop(cfg Config, event HookEvent) error {
 	client := &http.Client{Timeout: 5 * time.Second}
-	req, err := http.NewRequest("DELETE", cfg.DaemonURL+"/api/sessions/"+event.SessionID, nil)
+	url := cfg.DaemonURL + "/api/sessions/" + event.SessionID
+	if cfg.NodeName != "" {
+		url += "?node_name=" + cfg.NodeName
+	}
+	req, err := http.NewRequest("DELETE", url, nil)
 	if err != nil {
 		return err
 	}

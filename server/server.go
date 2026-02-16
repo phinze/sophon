@@ -32,30 +32,81 @@ type Config struct {
 	Port          int
 	NtfyURL       string
 	BaseURL       string
-	MinSessionAge int    // seconds before Stop sends notification
-	ClaudeDir     string // Claude Code config directory (for reading transcripts)
+	MinSessionAge int // seconds before Stop sends notification
+}
+
+// NodeOps abstracts per-node operations that may be proxied to a remote agent.
+type NodeOps interface {
+	PaneFocused(nodeName, pane string) bool
+	SendKeys(nodeName, pane, text string) error
+	ReadTranscript(nodeName, sessionID, cwd string) (*transcript.Transcript, error)
 }
 
 // Server is the sophon HTTP server.
 type Server struct {
-	cfg   Config
-	store *store.Store
-	logger *slog.Logger
-
-	// Injectable for testing
-	paneFocused func(pane string) bool
-	sendKeys    func(pane, text string) error
+	cfg     Config
+	store   *store.Store
+	logger  *slog.Logger
+	agents  *AgentRegistry
+	nodeOps NodeOps
 }
 
 // New creates a new Server.
 func New(cfg Config, st *store.Store, logger *slog.Logger) *Server {
-	return &Server{
-		cfg:         cfg,
-		store:       st,
-		logger:      logger,
-		paneFocused: tmuxPaneFocused,
-		sendKeys:    tmuxSendKeys,
+	s := &Server{
+		cfg:    cfg,
+		store:  st,
+		logger: logger,
+		agents: NewAgentRegistry(),
 	}
+	s.nodeOps = &agentProxyOps{
+		agents: s.agents,
+		client: newAgentClient(),
+		logger: logger,
+	}
+	return s
+}
+
+// agentProxyOps implements NodeOps by proxying to registered agents.
+type agentProxyOps struct {
+	agents *AgentRegistry
+	client *agentClient
+	logger *slog.Logger
+}
+
+func (o *agentProxyOps) PaneFocused(nodeName, pane string) bool {
+	info, ok := o.agents.Get(nodeName)
+	if !ok || !o.agents.IsHealthy(nodeName) {
+		o.logger.Debug("no healthy agent for pane focus check", "node", nodeName)
+		return false
+	}
+	focused, err := o.client.PaneFocused(info.URL, pane)
+	if err != nil {
+		o.logger.Debug("agent pane-focused error", "node", nodeName, "error", err)
+		return false
+	}
+	return focused
+}
+
+func (o *agentProxyOps) SendKeys(nodeName, pane, text string) error {
+	info, ok := o.agents.Get(nodeName)
+	if !ok || !o.agents.IsHealthy(nodeName) {
+		return fmt.Errorf("no healthy agent for node %q", nodeName)
+	}
+	return o.client.SendKeys(info.URL, pane, text)
+}
+
+func (o *agentProxyOps) ReadTranscript(nodeName, sessionID, cwd string) (*transcript.Transcript, error) {
+	info, ok := o.agents.Get(nodeName)
+	if !ok || !o.agents.IsHealthy(nodeName) {
+		return &transcript.Transcript{}, nil
+	}
+	tr, err := o.client.GetTranscript(info.URL, sessionID, cwd)
+	if err != nil {
+		o.logger.Debug("agent transcript error", "node", nodeName, "error", err)
+		return &transcript.Transcript{}, nil
+	}
+	return tr, nil
 }
 
 const stoppedSessionTTL = 24 * time.Hour
@@ -72,6 +123,7 @@ func (s *Server) Run() error {
 	mux.HandleFunc("DELETE /api/sessions/{id}", s.handleDeleteSession)
 	mux.HandleFunc("POST /api/respond/{id}", s.handleRespond)
 	mux.HandleFunc("GET /api/sessions/{id}/transcript", s.handleTranscript)
+	mux.HandleFunc("POST /api/agents/register", s.handleAgentRegister)
 
 	// Static assets
 	staticSub, _ := fs.Sub(staticFS, "static")
@@ -97,6 +149,7 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		SessionID string `json:"session_id"`
 		TmuxPane  string `json:"tmux_pane"`
 		Cwd       string `json:"cwd"`
+		NodeName  string `json:"node_name"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
@@ -111,6 +164,7 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		TmuxPane:       req.TmuxPane,
 		Cwd:            req.Cwd,
 		Project:        project,
+		NodeName:       req.NodeName,
 		StartedAt:      now,
 		LastActivityAt: now,
 	}
@@ -133,6 +187,7 @@ func (s *Server) handleNotify(w http.ResponseWriter, r *http.Request) {
 		Title            string `json:"title"`
 		Message          string `json:"message"`
 		Cwd              string `json:"cwd"`
+		NodeName         string `json:"node_name"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
@@ -146,6 +201,7 @@ func (s *Server) handleNotify(w http.ResponseWriter, r *http.Request) {
 			ID:        id,
 			Cwd:       req.Cwd,
 			Project:   store.ProjectFromCwd(req.Cwd),
+			NodeName:  req.NodeName,
 			StartedAt: time.Now(),
 		}
 	} else if err != nil {
@@ -158,10 +214,13 @@ func (s *Server) handleNotify(w http.ResponseWriter, r *http.Request) {
 			s.logger.Info("reviving stopped session", "session_id", id, "stopped_for", time.Since(sess.StoppedAt).Round(time.Second), "notification_type", req.NotificationType)
 			sess.StoppedAt = time.Time{}
 		}
-		// Backfill project/cwd if missing
+		// Backfill project/cwd/node_name if missing
 		if sess.Project == "" && req.Cwd != "" {
 			sess.Cwd = req.Cwd
 			sess.Project = store.ProjectFromCwd(req.Cwd)
+		}
+		if sess.NodeName == "" && req.NodeName != "" {
+			sess.NodeName = req.NodeName
 		}
 	}
 
@@ -179,7 +238,7 @@ func (s *Server) handleNotify(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Only push if the user isn't already looking at the pane
-	if s.paneFocused(sess.TmuxPane) {
+	if s.nodeOps.PaneFocused(sess.NodeName, sess.TmuxPane) {
 		s.logger.Info("notification suppressed (pane focused)", "session_id", id, "type", req.NotificationType)
 	} else {
 		s.sendNotification(sess, req.NotificationType, req.Message)
@@ -219,11 +278,12 @@ func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
 	elapsed := now.Sub(activityRef)
 
 	if int(elapsed.Seconds()) >= s.cfg.MinSessionAge {
-		if s.paneFocused(sess.TmuxPane) {
+		if s.nodeOps.PaneFocused(sess.NodeName, sess.TmuxPane) {
 			s.logger.Info("stop notification suppressed (pane focused)", "session_id", id)
 		} else {
 			mins := int(elapsed.Minutes())
-			lastText := s.readLastAssistantText(sess)
+			tr, _ := s.nodeOps.ReadTranscript(sess.NodeName, sess.ID, sess.Cwd)
+			lastText := transcript.LastAssistantText(tr)
 			s.sendStopNotification(sess, mins, lastText)
 		}
 	}
@@ -287,8 +347,8 @@ func (s *Server) handleRespond(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.sendKeys(sess.TmuxPane, req.Text); err != nil {
-		s.logger.Error("tmux send-keys failed", "error", err, "pane", sess.TmuxPane)
+	if err := s.nodeOps.SendKeys(sess.NodeName, sess.TmuxPane, req.Text); err != nil {
+		s.logger.Error("tmux send-keys failed", "error", err, "pane", sess.TmuxPane, "node", sess.NodeName)
 		http.Error(w, "failed to send response: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -351,30 +411,14 @@ func (s *Server) handleTranscript(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	path := transcript.TranscriptPath(s.cfg.ClaudeDir, sess.Cwd, id)
-	tr, err := transcript.Read(path)
+	tr, err := s.nodeOps.ReadTranscript(sess.NodeName, id, sess.Cwd)
 	if err != nil {
-		// Return empty transcript on error (file may not exist yet)
-		s.logger.Debug("transcript read failed", "path", path, "error", err)
+		s.logger.Debug("transcript read failed", "error", err)
 		tr = &transcript.Transcript{}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(tr)
-}
-
-// readLastAssistantText attempts to read the last assistant text from a session's transcript.
-// Returns "" on any error.
-func (s *Server) readLastAssistantText(sess *store.Session) string {
-	if s.cfg.ClaudeDir == "" {
-		return ""
-	}
-	path := transcript.TranscriptPath(s.cfg.ClaudeDir, sess.Cwd, sess.ID)
-	tr, err := transcript.Read(path)
-	if err != nil {
-		return ""
-	}
-	return transcript.LastAssistantText(tr)
 }
 
 // reapSessions periodically removes sessions that have been stopped longer than the TTL.
@@ -391,6 +435,21 @@ func (s *Server) reapSessions() {
 			s.logger.Info("session reaped", "session_id", id)
 		}
 	}
+}
+
+func (s *Server) handleAgentRegister(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		NodeName string `json:"node_name"`
+		URL      string `json:"url"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+
+	s.agents.Register(req.NodeName, req.URL)
+	s.logger.Info("agent registered", "node", req.NodeName, "url", req.URL)
+	w.WriteHeader(http.StatusOK)
 }
 
 func timeAgo(t time.Time) string {

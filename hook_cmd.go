@@ -11,6 +11,7 @@ func runHook(args []string) error {
 	fs := flag.NewFlagSet("hook", flag.ExitOnError)
 	daemonURL := fs.String("daemon-url", "", "sophon daemon URL")
 	ntfyURL := fs.String("ntfy-url", "", "ntfy URL for direct fallback")
+	nodeName := fs.String("node-name", defaultNodeName(), "node name for this machine")
 
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -30,7 +31,16 @@ func runHook(args []string) error {
 	cfg := hook.Config{
 		DaemonURL: *daemonURL,
 		NtfyURL:   *ntfyURL,
+		NodeName:  *nodeName,
 	}
 
 	return hook.Run(cfg)
+}
+
+func defaultNodeName() string {
+	name, err := os.Hostname()
+	if err != nil {
+		return "unknown"
+	}
+	return name
 }

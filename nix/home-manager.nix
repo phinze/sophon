@@ -39,6 +39,12 @@ in
       example = "https://foxtrotbase.swallow-galaxy.ts.net";
     };
 
+    nodeName = mkOption {
+      type = types.str;
+      default = config.networking.hostName or "unknown";
+      description = "Node name identifying this machine to the daemon.";
+    };
+
     hookCommand = mkOption {
       type = types.str;
       readOnly = true;
@@ -47,9 +53,10 @@ in
         "hook"
         "--daemon-url ${cfg.daemonUrl}"
         "--ntfy-url ${cfg.ntfyUrl}"
+        "--node-name ${cfg.nodeName}"
       ];
-      defaultText = literalExpression ''"''${cfg.package}/bin/sophon hook --daemon-url ''${cfg.daemonUrl} --ntfy-url ''${cfg.ntfyUrl}"'';
-      description = "Full hook command with daemon and ntfy URLs baked in. Use this in Claude Code hook configuration.";
+      defaultText = literalExpression ''"''${cfg.package}/bin/sophon hook --daemon-url ''${cfg.daemonUrl} --ntfy-url ''${cfg.ntfyUrl} --node-name ''${cfg.nodeName}"'';
+      description = "Full hook command with daemon URL, ntfy URL, and node name baked in. Use this in Claude Code hook configuration.";
     };
 
     minSessionAge = mkOption {
@@ -81,6 +88,32 @@ in
         type = types.enum [ "debug" "info" "warn" "error" ];
         default = "info";
         description = "Log level for the daemon.";
+      };
+    };
+
+    agent = {
+      enable = mkOption {
+        type = types.bool;
+        default = false;
+        description = "Run the sophon agent as a systemd user service.";
+      };
+
+      port = mkOption {
+        type = types.int;
+        default = 2588;
+        description = "Port for the sophon agent to listen on.";
+      };
+
+      autoStart = mkOption {
+        type = types.bool;
+        default = true;
+        description = "Start the agent automatically on user login.";
+      };
+
+      logLevel = mkOption {
+        type = types.enum [ "debug" "info" "warn" "error" ];
+        default = "info";
+        description = "Log level for the agent.";
       };
     };
   };
@@ -116,16 +149,48 @@ in
         Restart = "on-failure";
         RestartSec = "5s";
 
-        # tmux needs PATH and TMUX_TMPDIR to find the socket at /run/user/<uid>/tmux-<uid>/
         Environment = [
           "SOPHON_DAEMON_URL=${cfg.daemonUrl}"
           "SOPHON_NTFY_URL=${cfg.ntfyUrl}"
+        ];
+      };
+
+      Install = mkIf cfg.daemon.autoStart {
+        WantedBy = [ "default.target" ];
+      };
+    };
+    })
+
+    # When agent is enabled, run the per-node agent service
+    (mkIf cfg.agent.enable {
+      systemd.user.services.sophon-agent = {
+      Unit = {
+        Description = "Sophon Agent - per-node transcript and tmux proxy";
+        Documentation = "https://github.com/phinze/sophon";
+        After = [ "network.target" ];
+      };
+
+      Service = {
+        Type = "simple";
+        ExecStart = concatStringsSep " " [
+          "${cfg.package}/bin/sophon"
+          "agent"
+          "--port ${toString cfg.agent.port}"
+          "--daemon-url ${cfg.daemonUrl}"
+          "--node-name ${cfg.nodeName}"
+          "--log-level ${cfg.agent.logLevel}"
+        ];
+        Restart = "on-failure";
+        RestartSec = "5s";
+
+        # Agent needs tmux access for send-keys and pane focus detection
+        Environment = [
           "PATH=${pkgs.tmux}/bin:/run/current-system/sw/bin"
           "TMUX_TMPDIR=%t"
         ];
       };
 
-      Install = mkIf cfg.daemon.autoStart {
+      Install = mkIf cfg.agent.autoStart {
         WantedBy = [ "default.target" ];
       };
     };

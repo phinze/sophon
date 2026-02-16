@@ -19,8 +19,6 @@ func runDaemon(args []string) error {
 	minAge := fs.Int("min-session-age", 120, "minimum session age in seconds before stop notifications")
 	logLevel := fs.String("log-level", "info", "log level (debug, info, warn, error)")
 	dataDir := fs.String("data-dir", defaultDataDir(), "directory for persistent data (SQLite database)")
-	claudeDir := fs.String("claude-dir", defaultClaudeDir(), "Claude Code config directory (for reading transcripts)")
-
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -70,7 +68,6 @@ func runDaemon(args []string) error {
 		NtfyURL:       *ntfyURL,
 		BaseURL:       *baseURL,
 		MinSessionAge: *minAge,
-		ClaudeDir:     *claudeDir,
 	}
 
 	srv := server.New(cfg, st, logger)

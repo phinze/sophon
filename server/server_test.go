@@ -7,23 +7,46 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/phinze/sophon/store"
+	"github.com/phinze/sophon/transcript"
 )
 
+// mockNodeOps implements NodeOps for testing.
+type mockNodeOps struct {
+	focused     bool
+	sentKeys    []string
+	transcripts map[string]*transcript.Transcript // keyed by sessionID
+}
+
+func (m *mockNodeOps) PaneFocused(nodeName, pane string) bool {
+	return m.focused
+}
+
+func (m *mockNodeOps) SendKeys(nodeName, pane, text string) error {
+	m.sentKeys = append(m.sentKeys, text)
+	return nil
+}
+
+func (m *mockNodeOps) ReadTranscript(nodeName, sessionID, cwd string) (*transcript.Transcript, error) {
+	if m.transcripts != nil {
+		if tr, ok := m.transcripts[sessionID]; ok {
+			return tr, nil
+		}
+	}
+	return &transcript.Transcript{}, nil
+}
+
 // testHarness sets up a Server with an in-memory store, a mock ntfy endpoint,
-// and injectable tmux stubs.
+// and a mockNodeOps.
 type testHarness struct {
-	server    *Server
-	store     *store.Store
-	ntfyReqs  []*http.Request
+	server     *Server
+	store      *store.Store
+	ntfyReqs   []*http.Request
 	ntfyBodies []string
-	focused   bool // what paneFocused returns
-	sentKeys  []string
+	mockOps    mockNodeOps
 }
 
 func newTestHarness(t *testing.T) *testHarness {
@@ -53,11 +76,8 @@ func newTestHarness(t *testing.T) *testHarness {
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	h.server = New(cfg, st, logger)
-	h.server.paneFocused = func(pane string) bool { return h.focused }
-	h.server.sendKeys = func(pane, text string) error {
-		h.sentKeys = append(h.sentKeys, text)
-		return nil
-	}
+	h.mockOps = mockNodeOps{transcripts: make(map[string]*transcript.Transcript)}
+	h.server.nodeOps = &h.mockOps
 
 	return h
 }
@@ -68,6 +88,7 @@ func (h *testHarness) createSession(t *testing.T, id, pane, cwd string) {
 		"session_id": id,
 		"tmux_pane":  pane,
 		"cwd":        cwd,
+		"node_name":  "test-node",
 	})
 	req := httptest.NewRequest("POST", "/api/sessions", bytes.NewReader(body))
 	w := httptest.NewRecorder()
@@ -84,6 +105,7 @@ func (h *testHarness) notify(t *testing.T, id, notifType, message string) int {
 		"title":             "test",
 		"message":           message,
 		"cwd":               "/home/user/project",
+		"node_name":         "test-node",
 	})
 	req := httptest.NewRequest("POST", "/api/sessions/"+id+"/notify", bytes.NewReader(body))
 	req.SetPathValue("id", id)
@@ -108,7 +130,7 @@ func (h *testHarness) ntfyCount() int {
 func TestNotifySendsWhenPaneNotFocused(t *testing.T) {
 	h := newTestHarness(t)
 	h.createSession(t, "s1", "%5", "/home/user/project")
-	h.focused = false
+	h.mockOps.focused = false
 
 	h.notify(t, "s1", "permission_prompt", "Allow Bash?")
 
@@ -123,7 +145,7 @@ func TestNotifySendsWhenPaneNotFocused(t *testing.T) {
 func TestNotifySuppressedWhenPaneFocused(t *testing.T) {
 	h := newTestHarness(t)
 	h.createSession(t, "s1", "%5", "/home/user/project")
-	h.focused = true
+	h.mockOps.focused = true
 
 	h.notify(t, "s1", "permission_prompt", "Allow Bash?")
 
@@ -135,7 +157,7 @@ func TestNotifySuppressedWhenPaneFocused(t *testing.T) {
 func TestStopNotifySendsWhenPaneNotFocused(t *testing.T) {
 	h := newTestHarness(t)
 	h.createSession(t, "s1", "%5", "/home/user/project")
-	h.focused = false
+	h.mockOps.focused = false
 
 	// Backdate LastActivityAt so MinSessionAge is met
 	sess, _ := h.store.GetSession("s1")
@@ -155,7 +177,7 @@ func TestStopNotifySendsWhenPaneNotFocused(t *testing.T) {
 func TestStopNotifySuppressedWhenPaneFocused(t *testing.T) {
 	h := newTestHarness(t)
 	h.createSession(t, "s1", "%5", "/home/user/project")
-	h.focused = true
+	h.mockOps.focused = true
 
 	sess, _ := h.store.GetSession("s1")
 	sess.LastActivityAt = time.Now().Add(-10 * time.Minute)
@@ -171,7 +193,7 @@ func TestStopNotifySuppressedWhenPaneFocused(t *testing.T) {
 func TestStopDurationUsesLastActivity(t *testing.T) {
 	h := newTestHarness(t)
 	h.createSession(t, "s1", "%5", "/home/user/project")
-	h.focused = false
+	h.mockOps.focused = false
 
 	// Session started a long time ago, but last activity was 8 minutes ago
 	sess, _ := h.store.GetSession("s1")
@@ -194,7 +216,7 @@ func TestStopDurationUsesLastActivity(t *testing.T) {
 func TestStopSuppressedWhenTooYoung(t *testing.T) {
 	h := newTestHarness(t)
 	h.createSession(t, "s1", "%5", "/home/user/project")
-	h.focused = false
+	h.mockOps.focused = false
 
 	// Last activity was 30 seconds ago — below MinSessionAge (120s)
 	sess, _ := h.store.GetSession("s1")
@@ -273,7 +295,7 @@ func TestLastActivityUpdatedOnRespond(t *testing.T) {
 func TestStopNotifyIncludesLastMessage(t *testing.T) {
 	h := newTestHarness(t)
 	h.createSession(t, "s1", "%5", "/home/user/project")
-	h.focused = false
+	h.mockOps.focused = false
 
 	// Simulate a notification, then stop
 	h.notify(t, "s1", "permission_prompt", "Allow Bash: git status")
@@ -298,7 +320,7 @@ func TestStopNotifyIncludesLastMessage(t *testing.T) {
 func TestStopNotifyHasClickURL(t *testing.T) {
 	h := newTestHarness(t)
 	h.createSession(t, "s1", "%5", "/home/user/project")
-	h.focused = false
+	h.mockOps.focused = false
 
 	sess, _ := h.store.GetSession("s1")
 	sess.LastActivityAt = time.Now().Add(-10 * time.Minute)
@@ -316,9 +338,8 @@ func TestStopNotifyHasClickURL(t *testing.T) {
 	}
 }
 
-func TestTranscriptEndpointReturnsEmptyForMissingFile(t *testing.T) {
+func TestTranscriptEndpointReturnsEmptyForNoAgent(t *testing.T) {
 	h := newTestHarness(t)
-	h.server.cfg.ClaudeDir = t.TempDir() // no JSONL files here
 	h.createSession(t, "s1", "%5", "/home/user/project")
 
 	req := httptest.NewRequest("GET", "/api/sessions/s1/transcript", nil)
@@ -341,22 +362,22 @@ func TestTranscriptEndpointReturnsEmptyForMissingFile(t *testing.T) {
 
 func TestTranscriptEndpointWithData(t *testing.T) {
 	h := newTestHarness(t)
-	claudeDir := t.TempDir()
-	h.server.cfg.ClaudeDir = claudeDir
-
-	cwd := "/home/user/project"
 	sessionID := "test-sess-1"
-	h.createSession(t, sessionID, "%5", cwd)
+	h.createSession(t, sessionID, "%5", "/home/user/project")
 
-	// Create the JSONL file where TranscriptPath expects it
-	// slug: /home/user/project -> -home-user-project
-	projectDir := filepath.Join(claudeDir, "projects", "-home-user-project")
-	os.MkdirAll(projectDir, 0o755)
-	jsonlPath := filepath.Join(projectDir, sessionID+".jsonl")
-	jsonl := `{"type":"user","timestamp":"2026-01-01T00:00:00.000Z","message":{"role":"user","content":"Hello"}}
-{"type":"assistant","timestamp":"2026-01-01T00:00:01.000Z","message":{"role":"assistant","content":[{"type":"text","text":"Hi there!"}]}}
-`
-	os.WriteFile(jsonlPath, []byte(jsonl), 0o644)
+	// Set up mock transcript
+	h.mockOps.transcripts[sessionID] = &transcript.Transcript{
+		Messages: []transcript.Message{
+			{
+				Role:   "user",
+				Blocks: []transcript.Block{{Type: "text", Text: "Hello"}},
+			},
+			{
+				Role:   "assistant",
+				Blocks: []transcript.Block{{Type: "text", Text: "Hi there!"}},
+			},
+		},
+	}
 
 	req := httptest.NewRequest("GET", "/api/sessions/"+sessionID+"/transcript", nil)
 	req.SetPathValue("id", sessionID)
@@ -390,21 +411,20 @@ func TestTranscriptEndpointWithData(t *testing.T) {
 
 func TestStopNotifyUsesTranscriptText(t *testing.T) {
 	h := newTestHarness(t)
-	claudeDir := t.TempDir()
-	h.server.cfg.ClaudeDir = claudeDir
-	h.focused = false
+	h.mockOps.focused = false
 
-	cwd := "/home/user/project"
 	sessionID := "s-transcript"
-	h.createSession(t, sessionID, "%5", cwd)
+	h.createSession(t, sessionID, "%5", "/home/user/project")
 
-	// Create transcript with assistant text
-	projectDir := filepath.Join(claudeDir, "projects", "-home-user-project")
-	os.MkdirAll(projectDir, 0o755)
-	jsonlPath := filepath.Join(projectDir, sessionID+".jsonl")
-	jsonl := `{"type":"assistant","timestamp":"2026-01-01T00:00:01.000Z","message":{"role":"assistant","content":[{"type":"text","text":"All done! The fix is deployed."}]}}
-`
-	os.WriteFile(jsonlPath, []byte(jsonl), 0o644)
+	// Set up mock transcript with assistant text
+	h.mockOps.transcripts[sessionID] = &transcript.Transcript{
+		Messages: []transcript.Message{
+			{
+				Role:   "assistant",
+				Blocks: []transcript.Block{{Type: "text", Text: "All done! The fix is deployed."}},
+			},
+		},
+	}
 
 	// Also set a NotifyMessage to verify transcript takes priority
 	sess, _ := h.store.GetSession(sessionID)
@@ -420,5 +440,42 @@ func TestStopNotifyUsesTranscriptText(t *testing.T) {
 	want := "Finished after 8m\nAll done! The fix is deployed."
 	if h.ntfyBodies[0] != want {
 		t.Errorf("stop body = %q, want %q", h.ntfyBodies[0], want)
+	}
+}
+
+func TestNodeNameStoredOnCreate(t *testing.T) {
+	h := newTestHarness(t)
+	h.createSession(t, "s1", "%5", "/home/user/project")
+
+	sess, err := h.store.GetSession("s1")
+	if err != nil {
+		t.Fatalf("GetSession: %v", err)
+	}
+	if sess.NodeName != "test-node" {
+		t.Errorf("NodeName = %q, want %q", sess.NodeName, "test-node")
+	}
+}
+
+func TestAgentRegister(t *testing.T) {
+	h := newTestHarness(t)
+
+	body, _ := json.Marshal(map[string]string{
+		"node_name": "foxtrotbase",
+		"url":       "http://127.0.0.1:2588",
+	})
+	req := httptest.NewRequest("POST", "/api/agents/register", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	h.server.handleAgentRegister(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("got %d, want 200", w.Code)
+	}
+
+	info, ok := h.server.agents.Get("foxtrotbase")
+	if !ok {
+		t.Fatal("agent not registered")
+	}
+	if info.URL != "http://127.0.0.1:2588" {
+		t.Errorf("agent URL = %q", info.URL)
 	}
 }

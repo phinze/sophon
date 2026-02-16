@@ -17,6 +17,7 @@
       <div class="card-header">
         <span class="dot {{if .NotifyMessage}}dot-waiting{{else}}dot-active{{end}}"></span>
         <span class="project-name">{{.Project}}</span>
+        {{if .NodeName}}<span class="node-name">{{.NodeName}}</span>{{end}}
       </div>
       <div class="card-detail">
         Started {{timeAgo .StartedAt}}{{if not .LastActivityAt.IsZero}} · active {{timeAgo .LastActivityAt}}{{end}}{{if .NotifyMessage}} · notified {{timeAgo .NotifiedAt}}{{end}}
@@ -37,6 +38,7 @@
       <div class="card-header">
         <span class="dot dot-stopped"></span>
         <span class="project-name">{{.Project}}</span>
+        {{if .NodeName}}<span class="node-name">{{.NodeName}}</span>{{end}}
       </div>
       <div class="card-detail">Stopped {{timeAgo .StoppedAt}}</div>
     </div>

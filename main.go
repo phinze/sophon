@@ -7,13 +7,18 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintf(os.Stderr, "Usage: sophon <command>\n\nCommands:\n  daemon  Run the HTTP server\n  hook    Process Claude Code hook events from stdin\n")
+		fmt.Fprintf(os.Stderr, "Usage: sophon <command>\n\nCommands:\n  daemon  Run the coordinator HTTP server\n  agent   Run the per-node agent (transcript, tmux)\n  hook    Process Claude Code hook events from stdin\n")
 		os.Exit(1)
 	}
 
 	switch os.Args[1] {
 	case "daemon":
 		if err := runDaemon(os.Args[2:]); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+	case "agent":
+		if err := runAgent(os.Args[2:]); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
