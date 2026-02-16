@@ -104,6 +104,51 @@
   }
   .status.ok { display: block; background: #1b4332; color: #b7e4c7; }
   .status.err { display: block; background: #6a2d2d; color: #ffc0c0; }
+
+  /* Conversation view */
+  #conversation {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-height: 60vh;
+    overflow-y: auto;
+    margin-bottom: 16px;
+    padding: 4px;
+  }
+  #conversation:empty { display: none; }
+  .conv-empty {
+    font-size: 13px;
+    color: #555577;
+    text-align: center;
+    padding: 16px;
+  }
+  .msg {
+    max-width: 85%;
+    padding: 8px 12px;
+    border-radius: 12px;
+    font-size: 14px;
+    line-height: 1.4;
+    word-break: break-word;
+    white-space: pre-wrap;
+  }
+  .msg.user {
+    align-self: flex-end;
+    background: #2a4a6e;
+    color: #d0e0f0;
+    border-bottom-right-radius: 4px;
+  }
+  .msg.assistant {
+    align-self: flex-start;
+    background: #2a2a4a;
+    color: #d0d0e0;
+    border-bottom-left-radius: 4px;
+  }
+  .msg .tool-use {
+    font-family: "SF Mono", "Fira Code", monospace;
+    font-size: 12px;
+    color: #8888bb;
+    padding: 2px 0;
+  }
 </style>
 </head>
 <body>
@@ -113,6 +158,8 @@
   {{if .IsStopped}}
   <div class="session-state stopped">Session complete · stopped {{timeAgo .Session.StoppedAt}}</div>
   {{end}}
+
+  <div id="conversation"></div>
 
   {{if .Session.NotifyMessage}}
   <div class="context">{{.Session.NotifyMessage}}</div>
@@ -170,6 +217,41 @@ function sendText() {
   send(text);
   input.value = '';
 }
+
+function escapeHtml(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+function loadTranscript() {
+  fetch(apiBase + '/api/sessions/' + sessionId + '/transcript')
+    .then(r => r.json())
+    .then(data => {
+      const el = document.getElementById('conversation');
+      const messages = data.messages || [];
+      if (messages.length === 0) return;
+
+      let html = '';
+      messages.forEach(msg => {
+        const cls = msg.role === 'user' ? 'user' : 'assistant';
+        let content = '';
+        (msg.blocks || []).forEach(b => {
+          if (b.type === 'tool_use') {
+            content += '<div class="tool-use">' + escapeHtml(b.text) + '</div>';
+          } else {
+            content += escapeHtml(b.text);
+          }
+        });
+        html += '<div class="msg ' + cls + '">' + content + '</div>';
+      });
+      el.innerHTML = html;
+      el.scrollTop = el.scrollHeight;
+    })
+    .catch(() => {}); // graceful failure
+}
+
+loadTranscript();
 </script>
 </body>
 </html>

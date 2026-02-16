@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/phinze/sophon/store"
+	"github.com/phinze/sophon/transcript"
 )
 
 //go:embed templates/*.html
@@ -27,7 +28,8 @@ type Config struct {
 	Port          int
 	NtfyURL       string
 	BaseURL       string
-	MinSessionAge int // seconds before Stop sends notification
+	MinSessionAge int    // seconds before Stop sends notification
+	ClaudeDir     string // Claude Code config directory (for reading transcripts)
 }
 
 // Server is the sophon HTTP server.
@@ -65,6 +67,7 @@ func (s *Server) Run() error {
 	mux.HandleFunc("POST /api/sessions/{id}/notify", s.handleNotify)
 	mux.HandleFunc("DELETE /api/sessions/{id}", s.handleDeleteSession)
 	mux.HandleFunc("POST /api/respond/{id}", s.handleRespond)
+	mux.HandleFunc("GET /api/sessions/{id}/transcript", s.handleTranscript)
 
 	// Web UI
 	mux.HandleFunc("GET /sophon/respond/{id}", s.handleRespondPage)
@@ -212,7 +215,8 @@ func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
 			s.logger.Info("stop notification suppressed (pane focused)", "session_id", id)
 		} else {
 			mins := int(elapsed.Minutes())
-			s.sendStopNotification(sess, mins)
+			lastText := s.readLastAssistantText(sess)
+			s.sendStopNotification(sess, mins, lastText)
 		}
 	}
 	s.logger.Info("session stopped", "session_id", id, "work_duration", elapsed.Round(time.Second))
@@ -327,6 +331,45 @@ func (s *Server) handleSessionsPage(w http.ResponseWriter, r *http.Request) {
 		s.logger.Error("template render failed", "error", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 	}
+}
+
+func (s *Server) handleTranscript(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+
+	sess, err := s.store.GetSession(id)
+	if errors.Is(err, store.ErrNotFound) {
+		http.Error(w, "session not found", http.StatusNotFound)
+		return
+	} else if err != nil {
+		s.logger.Error("failed to get session", "error", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	path := transcript.TranscriptPath(s.cfg.ClaudeDir, sess.Cwd, id)
+	tr, err := transcript.Read(path)
+	if err != nil {
+		// Return empty transcript on error (file may not exist yet)
+		s.logger.Debug("transcript read failed", "path", path, "error", err)
+		tr = &transcript.Transcript{}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(tr)
+}
+
+// readLastAssistantText attempts to read the last assistant text from a session's transcript.
+// Returns "" on any error.
+func (s *Server) readLastAssistantText(sess *store.Session) string {
+	if s.cfg.ClaudeDir == "" {
+		return ""
+	}
+	path := transcript.TranscriptPath(s.cfg.ClaudeDir, sess.Cwd, sess.ID)
+	tr, err := transcript.Read(path)
+	if err != nil {
+		return ""
+	}
+	return transcript.LastAssistantText(tr)
 }
 
 // reapSessions periodically removes sessions that have been stopped longer than the TTL.

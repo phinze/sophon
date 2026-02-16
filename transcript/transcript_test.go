@@ -1,0 +1,207 @@
+package transcript
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+func TestCwdToSlug(t *testing.T) {
+	tests := []struct {
+		cwd  string
+		want string
+	}{
+		{"/home/phinze/foo", "-home-phinze-foo"},
+		{"/", "-"},
+		{"/a/b/c", "-a-b-c"},
+	}
+	for _, tt := range tests {
+		got := cwdToSlug(tt.cwd)
+		if got != tt.want {
+			t.Errorf("cwdToSlug(%q) = %q, want %q", tt.cwd, got, tt.want)
+		}
+	}
+}
+
+func TestTranscriptPath(t *testing.T) {
+	got := TranscriptPath("/home/user/.claude", "/home/user/project", "abc-123")
+	want := "/home/user/.claude/projects/-home-user-project/abc-123.jsonl"
+	if got != want {
+		t.Errorf("TranscriptPath = %q, want %q", got, want)
+	}
+}
+
+func TestReadFileNotFound(t *testing.T) {
+	_, err := Read("/nonexistent/file.jsonl")
+	if err == nil {
+		t.Fatal("expected error for nonexistent file")
+	}
+}
+
+func TestReadUserStringContent(t *testing.T) {
+	jsonl := `{"type":"user","timestamp":"2026-01-01T00:00:00.000Z","message":{"role":"user","content":"Hello there"}}` + "\n"
+
+	tr := readFromString(t, jsonl)
+	if len(tr.Messages) != 1 {
+		t.Fatalf("got %d messages, want 1", len(tr.Messages))
+	}
+	m := tr.Messages[0]
+	if m.Role != "user" {
+		t.Errorf("role = %q, want user", m.Role)
+	}
+	if len(m.Blocks) != 1 || m.Blocks[0].Text != "Hello there" {
+		t.Errorf("blocks = %+v", m.Blocks)
+	}
+}
+
+func TestReadUserArrayContent(t *testing.T) {
+	jsonl := `{"type":"user","timestamp":"2026-01-01T00:00:00.000Z","message":{"role":"user","content":[{"type":"text","text":"What is this?"}]}}` + "\n"
+
+	tr := readFromString(t, jsonl)
+	if len(tr.Messages) != 1 {
+		t.Fatalf("got %d messages, want 1", len(tr.Messages))
+	}
+	if tr.Messages[0].Blocks[0].Text != "What is this?" {
+		t.Errorf("text = %q", tr.Messages[0].Blocks[0].Text)
+	}
+}
+
+func TestReadSkipsToolResultOnlyUser(t *testing.T) {
+	jsonl := `{"type":"user","timestamp":"2026-01-01T00:00:00.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"123","content":"ok"}]}}` + "\n"
+
+	tr := readFromString(t, jsonl)
+	if len(tr.Messages) != 0 {
+		t.Fatalf("expected 0 messages for tool_result-only user, got %d", len(tr.Messages))
+	}
+}
+
+func TestReadAssistantTextAndToolUse(t *testing.T) {
+	jsonl := `{"type":"assistant","timestamp":"2026-01-01T00:00:01.000Z","message":{"role":"assistant","content":[{"type":"text","text":"Let me check."},{"type":"tool_use","id":"t1","name":"Read","input":{}}]}}` + "\n"
+
+	tr := readFromString(t, jsonl)
+	if len(tr.Messages) != 1 {
+		t.Fatalf("got %d messages, want 1", len(tr.Messages))
+	}
+	m := tr.Messages[0]
+	if m.Role != "assistant" {
+		t.Errorf("role = %q", m.Role)
+	}
+	if len(m.Blocks) != 2 {
+		t.Fatalf("got %d blocks, want 2", len(m.Blocks))
+	}
+	if m.Blocks[0].Type != "text" || m.Blocks[0].Text != "Let me check." {
+		t.Errorf("block 0 = %+v", m.Blocks[0])
+	}
+	if m.Blocks[1].Type != "tool_use" || m.Blocks[1].Text != "Read" {
+		t.Errorf("block 1 = %+v", m.Blocks[1])
+	}
+}
+
+func TestReadSkipsThinking(t *testing.T) {
+	jsonl := `{"type":"assistant","timestamp":"2026-01-01T00:00:01.000Z","message":{"role":"assistant","content":[{"type":"thinking","thinking":"hmm"},{"type":"text","text":"Here you go."}]}}` + "\n"
+
+	tr := readFromString(t, jsonl)
+	if len(tr.Messages) != 1 {
+		t.Fatalf("got %d messages, want 1", len(tr.Messages))
+	}
+	if len(tr.Messages[0].Blocks) != 1 {
+		t.Fatalf("got %d blocks, want 1 (thinking should be skipped)", len(tr.Messages[0].Blocks))
+	}
+	if tr.Messages[0].Blocks[0].Text != "Here you go." {
+		t.Errorf("text = %q", tr.Messages[0].Blocks[0].Text)
+	}
+}
+
+func TestReadSkipsProgressAndOtherTypes(t *testing.T) {
+	lines := `{"type":"progress","data":{"type":"hook_progress"}}
+{"type":"file-history-snapshot","snapshot":{}}
+{"type":"system","message":"hello"}
+{"type":"user","timestamp":"2026-01-01T00:00:00.000Z","message":{"role":"user","content":"real message"}}
+`
+	tr := readFromString(t, lines)
+	if len(tr.Messages) != 1 {
+		t.Fatalf("got %d messages, want 1 (only user message)", len(tr.Messages))
+	}
+}
+
+func TestLastAssistantText(t *testing.T) {
+	tr := &Transcript{
+		Messages: []Message{
+			{Role: "user", Blocks: []Block{{Type: "text", Text: "hi"}}},
+			{Role: "assistant", Blocks: []Block{{Type: "text", Text: "first reply"}}},
+			{Role: "user", Blocks: []Block{{Type: "text", Text: "thanks"}}},
+			{Role: "assistant", Blocks: []Block{
+				{Type: "tool_use", Text: "Bash"},
+				{Type: "text", Text: "last reply"},
+			}},
+		},
+	}
+	got := LastAssistantText(tr)
+	if got != "last reply" {
+		t.Errorf("LastAssistantText = %q, want %q", got, "last reply")
+	}
+}
+
+func TestLastAssistantTextEmpty(t *testing.T) {
+	tr := &Transcript{Messages: []Message{
+		{Role: "user", Blocks: []Block{{Type: "text", Text: "hi"}}},
+	}}
+	got := LastAssistantText(tr)
+	if got != "" {
+		t.Errorf("LastAssistantText = %q, want empty", got)
+	}
+}
+
+func TestLastAssistantTextToolUseOnly(t *testing.T) {
+	tr := &Transcript{Messages: []Message{
+		{Role: "assistant", Blocks: []Block{{Type: "tool_use", Text: "Bash"}}},
+	}}
+	got := LastAssistantText(tr)
+	if got != "" {
+		t.Errorf("LastAssistantText = %q, want empty (no text blocks)", got)
+	}
+}
+
+func TestReadMixedConversation(t *testing.T) {
+	lines := `{"type":"file-history-snapshot","snapshot":{}}
+{"type":"progress","data":{"type":"hook_progress"}}
+{"type":"user","timestamp":"2026-01-01T00:00:00.000Z","message":{"role":"user","content":"Fix the bug"}}
+{"type":"assistant","timestamp":"2026-01-01T00:00:01.000Z","message":{"role":"assistant","content":[{"type":"thinking","thinking":"Let me think..."},{"type":"text","text":"I'll look into it."}]}}
+{"type":"assistant","timestamp":"2026-01-01T00:00:02.000Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Read","input":{"file_path":"/foo"}}]}}
+{"type":"user","timestamp":"2026-01-01T00:00:03.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"file contents"}]}}
+{"type":"assistant","timestamp":"2026-01-01T00:00:04.000Z","message":{"role":"assistant","content":[{"type":"text","text":"Found the issue."}]}}
+`
+	tr := readFromString(t, lines)
+	// Expected: user("Fix the bug"), assistant("I'll look into it."), assistant(tool_use:Read), assistant("Found the issue.")
+	// The tool_result user message should be skipped
+	if len(tr.Messages) != 4 {
+		t.Fatalf("got %d messages, want 4", len(tr.Messages))
+	}
+	if tr.Messages[0].Role != "user" || tr.Messages[0].Blocks[0].Text != "Fix the bug" {
+		t.Errorf("msg 0: %+v", tr.Messages[0])
+	}
+	if tr.Messages[1].Role != "assistant" || tr.Messages[1].Blocks[0].Text != "I'll look into it." {
+		t.Errorf("msg 1: %+v", tr.Messages[1])
+	}
+	if tr.Messages[2].Role != "assistant" || tr.Messages[2].Blocks[0].Type != "tool_use" {
+		t.Errorf("msg 2: %+v", tr.Messages[2])
+	}
+	if tr.Messages[3].Role != "assistant" || tr.Messages[3].Blocks[0].Text != "Found the issue." {
+		t.Errorf("msg 3: %+v", tr.Messages[3])
+	}
+}
+
+// readFromString writes content to a temp file and reads it as a transcript.
+func readFromString(t *testing.T, content string) *Transcript {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.jsonl")
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("writing temp file: %v", err)
+	}
+	tr, err := Read(path)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	return tr
+}

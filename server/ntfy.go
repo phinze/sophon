@@ -50,14 +50,22 @@ func (s *Server) sendNotification(sess *store.Session, notificationType, message
 }
 
 // sendStopNotification sends a session completion notification.
-func (s *Server) sendStopNotification(sess *store.Session, mins int) {
+func (s *Server) sendStopNotification(sess *store.Session, mins int, lastAssistantText string) {
 	if s.cfg.NtfyURL == "" {
 		return
 	}
 
 	title := fmt.Sprintf("[%s] Session complete", sess.Project)
 	body := fmt.Sprintf("Finished after %dm", mins)
-	if sess.NotifyMessage != "" {
+
+	// Prefer transcript text, fall back to last notification message
+	if lastAssistantText != "" {
+		text := lastAssistantText
+		if len(text) > 200 {
+			text = text[:200] + "..."
+		}
+		body += "\n" + text
+	} else if sess.NotifyMessage != "" {
 		body += "\n" + sess.NotifyMessage
 	}
 
