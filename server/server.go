@@ -225,11 +225,10 @@ func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
 }
 
 type respondPageData struct {
-	Session   *store.Session
-	BaseURL   string
-	TimeAgo   string
-	HasPerm   bool
-	IsStopped bool
+	Session *store.Session
+	BaseURL string
+	TimeAgo string
+	HasPerm bool
 }
 
 func (s *Server) handleRespondPage(w http.ResponseWriter, r *http.Request) {
@@ -245,13 +244,11 @@ func (s *Server) handleRespondPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	stopped := !sess.StoppedAt.IsZero()
 	data := respondPageData{
-		Session:   sess,
-		BaseURL:   s.cfg.BaseURL,
-		TimeAgo:   timeAgo(sess.NotifiedAt),
-		HasPerm:   sess.NotificationType == "permission_prompt",
-		IsStopped: stopped,
+		Session: sess,
+		BaseURL: s.cfg.BaseURL,
+		TimeAgo: timeAgo(sess.NotifiedAt),
+		HasPerm: sess.NotificationType == "permission_prompt",
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")

@@ -79,16 +79,6 @@
     cursor: pointer;
   }
   .input-group button:active { opacity: 0.7; }
-  .session-state {
-    font-size: 13px;
-    padding: 8px 12px;
-    border-radius: 8px;
-    margin-bottom: 12px;
-  }
-  .session-state.stopped {
-    background: #1a2a1a;
-    color: #8aaa8a;
-  }
   .meta {
     font-size: 12px;
     color: #555577;
@@ -189,10 +179,6 @@
 <div class="container">
   <div class="project">{{.Session.Project}}</div>
 
-  {{if .IsStopped}}
-  <div class="session-state stopped">Session complete · stopped {{timeAgo .Session.StoppedAt}}</div>
-  {{end}}
-
   <div id="conversation"></div>
 
   {{if .Session.NotifyMessage}}
@@ -201,21 +187,19 @@
 
   <div id="status" class="status"></div>
 
-  {{if not .IsStopped}}
-    {{if .HasPerm}}
-    <div class="quick-buttons">
-      <button class="btn-allow" onclick="send('y')">Allow</button>
-      <button class="btn-allow-all" onclick="send('a')">Always</button>
-      <button class="btn-deny" onclick="send('n')">Deny</button>
-    </div>
-    {{end}}
-
-    <div class="input-group">
-      <input type="text" id="text" placeholder="Type a response..." autofocus
-             onkeydown="if(event.key==='Enter')sendText()">
-      <button onclick="sendText()">Send</button>
-    </div>
+  {{if .HasPerm}}
+  <div class="quick-buttons">
+    <button class="btn-allow" onclick="send('y')">Allow</button>
+    <button class="btn-allow-all" onclick="send('a')">Always</button>
+    <button class="btn-deny" onclick="send('n')">Deny</button>
+  </div>
   {{end}}
+
+  <div class="input-group">
+    <input type="text" id="text" placeholder="Type a response..." autofocus
+           onkeydown="if(event.key==='Enter')sendText()">
+    <button onclick="sendText()">Send</button>
+  </div>
 
   <div class="meta">Session {{.Session.ID}} · {{.TimeAgo}}</div>
 </div>
