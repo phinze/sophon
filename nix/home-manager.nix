@@ -41,7 +41,6 @@ in
 
     nodeName = mkOption {
       type = types.str;
-      default = config.networking.hostName or "unknown";
       description = "Node name identifying this machine to the daemon.";
     };
 
