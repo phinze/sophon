@@ -53,7 +53,7 @@ func Run(cfg Config) error {
 	case "SessionEnd":
 		return handleSessionEnd(cfg, event)
 	default:
-		// Unknown event, ignore
+		fmt.Fprintf(os.Stderr, "sophon: unhandled hook event %q (session %s)\n", event.HookEventName, event.SessionID)
 		return nil
 	}
 }
