@@ -202,6 +202,16 @@ func parseAssistantEntry(entry jsonlEntry) (Message, bool) {
 		return Message{}, false
 	}
 
+	// Check if this message contains ExitPlanMode — if so, preserve the
+	// Write tool input so the plan content can be displayed.
+	hasExitPlanMode := false
+	for _, b := range blocks {
+		if b.Type == "tool_use" && b.Name == "ExitPlanMode" {
+			hasExitPlanMode = true
+			break
+		}
+	}
+
 	var displayBlocks []Block
 	for _, b := range blocks {
 		switch b.Type {
@@ -212,6 +222,8 @@ func parseAssistantEntry(entry jsonlEntry) (Message, bool) {
 		case "tool_use":
 			blk := Block{Type: "tool_use", Text: b.Name}
 			if toolsWithDisplayableInput[b.Name] && len(b.Input) > 0 {
+				blk.Input = b.Input
+			} else if hasExitPlanMode && b.Name == "Write" && len(b.Input) > 0 {
 				blk.Input = b.Input
 			}
 			displayBlocks = append(displayBlocks, blk)

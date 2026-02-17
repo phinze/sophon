@@ -170,6 +170,21 @@ body[data-page="sessions"] .container { max-width: 600px; }
   color: #8888bb;
   padding: 2px 0;
 }
+.msg .tool-use.plan-approval {
+  color: #9999cc;
+  font-weight: 600;
+  padding: 4px 0;
+}
+.msg .plan-content {
+  background: #1a1a3a;
+  border: 1px solid #3a3a5a;
+  border-radius: 6px;
+  padding: 8px 12px;
+  margin: 4px 0;
+  font-size: 13px;
+  max-height: 400px;
+  overflow-y: auto;
+}
 .ask-question {
   margin-top: 4px;
   white-space: normal;

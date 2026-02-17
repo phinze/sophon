@@ -20,10 +20,16 @@ interface AskQuestionInput {
   questions?: AskQuestion[];
 }
 
+interface WriteInput {
+  file_path?: string;
+  content?: string;
+}
+
 interface TranscriptBlock {
   type: string;
   text: string;
-  input?: AskQuestionInput;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  input?: AskQuestionInput & WriteInput & Record<string, any>;
 }
 
 interface TranscriptMessage {
@@ -122,6 +128,10 @@ function loadTranscript(): void {
         (msg.blocks || []).forEach((b) => {
           if (b.type === "tool_use" && b.text === "AskUserQuestion" && b.input) {
             content += renderAskQuestion(b.input);
+          } else if (b.type === "tool_use" && b.text === "Write" && b.input?.content) {
+            content += '<div class="plan-content">' + renderMarkdown(b.input.content) + "</div>";
+          } else if (b.type === "tool_use" && b.text === "ExitPlanMode") {
+            content += '<div class="tool-use plan-approval">Plan ready for approval</div>';
           } else if (b.type === "tool_use") {
             content += '<div class="tool-use">' + escapeHtml(b.text) + "</div>";
           } else {

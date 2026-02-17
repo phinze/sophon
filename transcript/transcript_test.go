@@ -233,6 +233,52 @@ func TestReadRegularToolUseOmitsInput(t *testing.T) {
 	}
 }
 
+func TestReadExitPlanModePreservesWriteInput(t *testing.T) {
+	jsonl := `{"type":"assistant","timestamp":"2026-01-01T00:00:01.000Z","message":{"role":"assistant","content":[{"type":"text","text":"Here is the plan."},{"type":"tool_use","id":"t1","name":"Write","input":{"file_path":"/tmp/plan.md","content":"## Plan\n\nDo the thing."}},{"type":"tool_use","id":"t2","name":"ExitPlanMode","input":{}}]}}` + "\n"
+
+	tr := readFromString(t, jsonl)
+	if len(tr.Messages) != 1 {
+		t.Fatalf("got %d messages, want 1", len(tr.Messages))
+	}
+	m := tr.Messages[0]
+	if len(m.Blocks) != 3 {
+		t.Fatalf("got %d blocks, want 3", len(m.Blocks))
+	}
+
+	// Write input should be preserved because ExitPlanMode is present
+	writeBlock := m.Blocks[1]
+	if writeBlock.Text != "Write" {
+		t.Errorf("block 1 text = %q, want Write", writeBlock.Text)
+	}
+	if writeBlock.Input == nil {
+		t.Fatal("Write input should be preserved when ExitPlanMode is present")
+	}
+	var writeInput map[string]interface{}
+	if err := json.Unmarshal(writeBlock.Input, &writeInput); err != nil {
+		t.Fatalf("failed to parse Write input: %v", err)
+	}
+	if writeInput["content"] != "## Plan\n\nDo the thing." {
+		t.Errorf("Write content = %v", writeInput["content"])
+	}
+
+	// ExitPlanMode block should be present
+	if m.Blocks[2].Text != "ExitPlanMode" {
+		t.Errorf("block 2 text = %q, want ExitPlanMode", m.Blocks[2].Text)
+	}
+}
+
+func TestReadWriteWithoutExitPlanModeOmitsInput(t *testing.T) {
+	jsonl := `{"type":"assistant","timestamp":"2026-01-01T00:00:01.000Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Write","input":{"file_path":"/tmp/foo.go","content":"package main"}}]}}` + "\n"
+
+	tr := readFromString(t, jsonl)
+	if len(tr.Messages) != 1 {
+		t.Fatalf("got %d messages, want 1", len(tr.Messages))
+	}
+	if tr.Messages[0].Blocks[0].Input != nil {
+		t.Error("Write input should not be preserved without ExitPlanMode")
+	}
+}
+
 // readFromString writes content to a temp file and reads it as a transcript.
 func readFromString(t *testing.T, content string) *Transcript {
 	t.Helper()
