@@ -279,6 +279,91 @@ func TestReadWriteWithoutExitPlanModeOmitsInput(t *testing.T) {
 	}
 }
 
+func TestReadSkipsIsMetaUser(t *testing.T) {
+	jsonl := `{"type":"user","timestamp":"2026-01-01T00:00:00.000Z","isMeta":true,"message":{"role":"user","content":"<local-command-caveat>something</local-command-caveat>"}}` + "\n"
+
+	tr := readFromString(t, jsonl)
+	if len(tr.Messages) != 0 {
+		t.Fatalf("expected 0 messages for isMeta user, got %d", len(tr.Messages))
+	}
+}
+
+func TestReadSkipsSyntheticApiError(t *testing.T) {
+	jsonl := `{"type":"assistant","timestamp":"2026-01-01T00:00:01.000Z","message":{"role":"assistant","model":"<synthetic>","isApiErrorMessage":true,"content":[{"type":"text","text":"API error occurred"}]}}` + "\n"
+
+	tr := readFromString(t, jsonl)
+	if len(tr.Messages) != 0 {
+		t.Fatalf("expected 0 messages for synthetic API error, got %d", len(tr.Messages))
+	}
+}
+
+func TestReadSkipsSyntheticModelOnly(t *testing.T) {
+	jsonl := `{"type":"assistant","timestamp":"2026-01-01T00:00:01.000Z","message":{"role":"assistant","model":"<synthetic>","content":[{"type":"text","text":"Some injected text"}]}}` + "\n"
+
+	tr := readFromString(t, jsonl)
+	if len(tr.Messages) != 0 {
+		t.Fatalf("expected 0 messages for synthetic model, got %d", len(tr.Messages))
+	}
+}
+
+func TestReadStripsSystemRemindersFromText(t *testing.T) {
+	jsonl := `{"type":"assistant","timestamp":"2026-01-01T00:00:01.000Z","message":{"role":"assistant","content":[{"type":"text","text":"Real content.\n<system-reminder>injected noise</system-reminder>"}]}}` + "\n"
+
+	tr := readFromString(t, jsonl)
+	if len(tr.Messages) != 1 {
+		t.Fatalf("got %d messages, want 1", len(tr.Messages))
+	}
+	if tr.Messages[0].Blocks[0].Text != "Real content." {
+		t.Errorf("text = %q, want %q", tr.Messages[0].Blocks[0].Text, "Real content.")
+	}
+}
+
+func TestReadStripsSystemRemindersFromUserString(t *testing.T) {
+	jsonl := `{"type":"user","timestamp":"2026-01-01T00:00:00.000Z","message":{"role":"user","content":"Hello\n<system-reminder>noise</system-reminder>\nWorld"}}` + "\n"
+
+	tr := readFromString(t, jsonl)
+	if len(tr.Messages) != 1 {
+		t.Fatalf("got %d messages, want 1", len(tr.Messages))
+	}
+	if tr.Messages[0].Blocks[0].Text != "Hello\n\nWorld" {
+		t.Errorf("text = %q, want %q", tr.Messages[0].Blocks[0].Text, "Hello\n\nWorld")
+	}
+}
+
+func TestReadSystemReminderOnlyTextDropsMessage(t *testing.T) {
+	jsonl := `{"type":"assistant","timestamp":"2026-01-01T00:00:01.000Z","message":{"role":"assistant","content":[{"type":"text","text":"<system-reminder>only noise here</system-reminder>"}]}}` + "\n"
+
+	tr := readFromString(t, jsonl)
+	if len(tr.Messages) != 0 {
+		t.Fatalf("expected 0 messages when content is only system-reminder, got %d", len(tr.Messages))
+	}
+}
+
+func TestReadMixedConversationWithNoise(t *testing.T) {
+	lines := `{"type":"user","timestamp":"2026-01-01T00:00:00.000Z","isMeta":true,"message":{"role":"user","content":"<local-command-caveat>caveat</local-command-caveat>"}}
+{"type":"user","timestamp":"2026-01-01T00:00:01.000Z","message":{"role":"user","content":"Fix the bug"}}
+{"type":"assistant","timestamp":"2026-01-01T00:00:02.000Z","message":{"role":"assistant","model":"<synthetic>","isApiErrorMessage":true,"content":[{"type":"text","text":"error msg"}]}}
+{"type":"assistant","timestamp":"2026-01-01T00:00:03.000Z","message":{"role":"assistant","content":[{"type":"text","text":"Sure, let me look.\n<system-reminder>injected</system-reminder>"}]}}
+{"type":"assistant","timestamp":"2026-01-01T00:00:04.000Z","message":{"role":"assistant","content":[{"type":"text","text":"<system-reminder>only noise</system-reminder>"}]}}
+{"type":"assistant","timestamp":"2026-01-01T00:00:05.000Z","message":{"role":"assistant","content":[{"type":"text","text":"Done!"}]}}
+`
+	tr := readFromString(t, lines)
+	// Expected: user("Fix the bug"), assistant("Sure, let me look."), assistant("Done!")
+	// Filtered: isMeta user, synthetic API error, system-reminder-only assistant
+	if len(tr.Messages) != 3 {
+		t.Fatalf("got %d messages, want 3", len(tr.Messages))
+	}
+	if tr.Messages[0].Role != "user" || tr.Messages[0].Blocks[0].Text != "Fix the bug" {
+		t.Errorf("msg 0: %+v", tr.Messages[0])
+	}
+	if tr.Messages[1].Role != "assistant" || tr.Messages[1].Blocks[0].Text != "Sure, let me look." {
+		t.Errorf("msg 1: %+v", tr.Messages[1])
+	}
+	if tr.Messages[2].Role != "assistant" || tr.Messages[2].Blocks[0].Text != "Done!" {
+		t.Errorf("msg 2: %+v", tr.Messages[2])
+	}
+}
+
 // readFromString writes content to a temp file and reads it as a transcript.
 func readFromString(t *testing.T, content string) *Transcript {
 	t.Helper()

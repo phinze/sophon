@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -88,12 +89,15 @@ type jsonlEntry struct {
 	Type      string          `json:"type"`
 	Timestamp string          `json:"timestamp"`
 	Message   json.RawMessage `json:"message"`
+	IsMeta    bool            `json:"isMeta"`
 }
 
 // messageEnvelope is the message field inside a JSONL entry.
 type messageEnvelope struct {
-	Role    string          `json:"role"`
-	Content json.RawMessage `json:"content"`
+	Role              string          `json:"role"`
+	Content           json.RawMessage `json:"content"`
+	Model             string          `json:"model"`
+	IsApiErrorMessage bool            `json:"isApiErrorMessage"`
 }
 
 // contentBlock is a single block in the content array.
@@ -113,6 +117,10 @@ var toolsWithDisplayableInput = map[string]bool{
 func parseLine(line []byte) (Message, bool) {
 	var entry jsonlEntry
 	if err := json.Unmarshal(line, &entry); err != nil {
+		return Message{}, false
+	}
+
+	if entry.IsMeta {
 		return Message{}, false
 	}
 
@@ -142,6 +150,7 @@ func parseUserEntry(entry jsonlEntry) (Message, bool) {
 	// Try string first
 	var strContent string
 	if err := json.Unmarshal(env.Content, &strContent); err == nil {
+		strContent = stripSystemReminders(strContent)
 		if strContent == "" {
 			return Message{}, false
 		}
@@ -164,9 +173,10 @@ func parseUserEntry(entry jsonlEntry) (Message, bool) {
 	for _, b := range blocks {
 		switch b.Type {
 		case "text":
-			if b.Text != "" {
+			text := stripSystemReminders(b.Text)
+			if text != "" {
 				hasNonToolResult = true
-				displayBlocks = append(displayBlocks, Block{Type: "text", Text: b.Text})
+				displayBlocks = append(displayBlocks, Block{Type: "text", Text: text})
 			}
 		case "tool_result":
 			// skip — automatic feedback
@@ -194,6 +204,9 @@ func parseAssistantEntry(entry jsonlEntry) (Message, bool) {
 	if env.Role != "assistant" {
 		return Message{}, false
 	}
+	if env.IsApiErrorMessage || env.Model == "<synthetic>" {
+		return Message{}, false
+	}
 
 	ts, _ := time.Parse(time.RFC3339Nano, entry.Timestamp)
 
@@ -216,8 +229,9 @@ func parseAssistantEntry(entry jsonlEntry) (Message, bool) {
 	for _, b := range blocks {
 		switch b.Type {
 		case "text":
-			if b.Text != "" {
-				displayBlocks = append(displayBlocks, Block{Type: "text", Text: b.Text})
+			text := stripSystemReminders(b.Text)
+			if text != "" {
+				displayBlocks = append(displayBlocks, Block{Type: "text", Text: text})
 			}
 		case "tool_use":
 			blk := Block{Type: "tool_use", Text: b.Name}
@@ -243,4 +257,10 @@ func parseAssistantEntry(entry jsonlEntry) (Message, bool) {
 		Timestamp: ts,
 		Blocks:    displayBlocks,
 	}, true
+}
+
+var systemReminderRe = regexp.MustCompile(`(?s)<system-reminder>.*?</system-reminder>`)
+
+func stripSystemReminders(s string) string {
+	return strings.TrimSpace(systemReminderRe.ReplaceAllString(s, ""))
 }
