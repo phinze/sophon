@@ -220,6 +220,8 @@ func (s *Server) handleNotify(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	previouslyNotified := !sess.NotifiedAt.IsZero()
+
 	now := time.Now()
 	sess.NotificationType = req.NotificationType
 	sess.NotifyTitle = req.Title
@@ -233,8 +235,10 @@ func (s *Server) handleNotify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Only push if the user isn't already looking at the pane
-	if s.nodeOps.PaneFocused(sess.NodeName, sess.TmuxPane) {
+	// Decide whether to push a notification
+	if req.NotificationType == "idle_prompt" && previouslyNotified {
+		s.logger.Info("notification suppressed (already notified)", "session_id", id, "type", req.NotificationType)
+	} else if s.nodeOps.PaneFocused(sess.NodeName, sess.TmuxPane) {
 		s.logger.Info("notification suppressed (pane focused)", "session_id", id, "type", req.NotificationType)
 	} else {
 		s.sendNotification(sess, req.NotificationType, req.Message)
