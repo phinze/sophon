@@ -42,6 +42,12 @@ interface TranscriptData {
   messages?: TranscriptMessage[];
 }
 
+interface NotificationData {
+  type?: string;
+  message?: string;
+  title?: string;
+}
+
 declare global {
   interface Window {
     __SOPHON__: SophonConfig;
@@ -148,8 +154,54 @@ function loadTranscript(): void {
     .catch(() => {}); // graceful failure
 }
 
+function connectSSE(): void {
+  const evtSource = new EventSource(apiBase + "/api/sessions/" + sessionId + "/events");
+
+  evtSource.addEventListener("notification", (e: MessageEvent) => {
+    loadTranscript();
+    const data: NotificationData = JSON.parse(e.data);
+    showWebNotification(data);
+  });
+
+  evtSource.addEventListener("activity", () => {
+    loadTranscript();
+  });
+
+  evtSource.addEventListener("response", () => {
+    loadTranscript();
+  });
+
+  evtSource.addEventListener("session_end", () => {
+    showStatus("Session ended", true);
+    evtSource.close();
+  });
+}
+
+function requestNotificationPermission(): void {
+  if (!("Notification" in window)) return;
+  if (Notification.permission === "default") {
+    Notification.requestPermission();
+  }
+}
+
+function showWebNotification(data: NotificationData): void {
+  if (!("Notification" in window)) return;
+  if (Notification.permission !== "granted") return;
+
+  const title = data.title || "sophon";
+  const body = data.message || "";
+  const notification = new Notification(title, { body, tag: "sophon-" + sessionId });
+
+  notification.onclick = () => {
+    window.focus();
+    notification.close();
+  };
+}
+
 // Expose for inline onclick/onkeydown handlers in template
 window.send = send;
 window.sendText = sendText;
 
+requestNotificationPermission();
 loadTranscript();
+connectSSE();
