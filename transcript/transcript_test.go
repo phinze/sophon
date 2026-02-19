@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -377,4 +378,175 @@ func readFromString(t *testing.T, content string) *Transcript {
 		t.Fatalf("Read: %v", err)
 	}
 	return tr
+}
+
+// --- Tool summary tests ---
+
+func TestToolSummaryRead(t *testing.T) {
+	jsonl := `{"type":"assistant","timestamp":"2026-01-01T00:00:01.000Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Read","input":{"file_path":"/home/user/src/main.go"}}]}}
+{"type":"user","timestamp":"2026-01-01T00:00:02.000Z","isMeta":true,"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"package main"}]}}
+`
+	tr := readFromString(t, jsonl)
+	if len(tr.Messages) != 1 {
+		t.Fatalf("got %d messages, want 1", len(tr.Messages))
+	}
+	blk := tr.Messages[0].Blocks[0]
+	if blk.Summary != "Read user/src/main.go" {
+		t.Errorf("summary = %q, want %q", blk.Summary, "Read user/src/main.go")
+	}
+}
+
+func TestToolSummaryBash(t *testing.T) {
+	jsonl := `{"type":"assistant","timestamp":"2026-01-01T00:00:01.000Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"go test ./..."}}]}}
+{"type":"user","timestamp":"2026-01-01T00:00:02.000Z","isMeta":true,"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"PASS"}]}}
+`
+	tr := readFromString(t, jsonl)
+	blk := tr.Messages[0].Blocks[0]
+	if blk.Summary != "Bash: go test ./..." {
+		t.Errorf("summary = %q, want %q", blk.Summary, "Bash: go test ./...")
+	}
+}
+
+func TestToolSummaryEdit(t *testing.T) {
+	jsonl := `{"type":"assistant","timestamp":"2026-01-01T00:00:01.000Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Edit","input":{"file_path":"/home/user/src/transcript.go","old_string":"foo","new_string":"bar"}}]}}
+`
+	tr := readFromString(t, jsonl)
+	blk := tr.Messages[0].Blocks[0]
+	if blk.Summary != "Edit user/src/transcript.go" {
+		t.Errorf("summary = %q, want %q", blk.Summary, "Edit user/src/transcript.go")
+	}
+}
+
+func TestToolSummaryGrep(t *testing.T) {
+	jsonl := `{"type":"assistant","timestamp":"2026-01-01T00:00:01.000Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Grep","input":{"pattern":"parseUser"}}]}}
+`
+	tr := readFromString(t, jsonl)
+	blk := tr.Messages[0].Blocks[0]
+	want := "Grep \u00abparseUser\u00bb"
+	if blk.Summary != want {
+		t.Errorf("summary = %q, want %q", blk.Summary, want)
+	}
+}
+
+func TestToolSummaryMCP(t *testing.T) {
+	jsonl := `{"type":"assistant","timestamp":"2026-01-01T00:00:01.000Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"mcp__linear-server__get_issue","input":{"id":"LIN-123"}}]}}
+`
+	tr := readFromString(t, jsonl)
+	blk := tr.Messages[0].Blocks[0]
+	if blk.Summary != "get_issue: LIN-123" {
+		t.Errorf("summary = %q, want %q", blk.Summary, "get_issue: LIN-123")
+	}
+}
+
+func TestToolSummaryLongCommand(t *testing.T) {
+	longCmd := "go test -v -count=1 -run TestSomethingVeryLongNameHere ./pkg/something/deeply/nested/..."
+	input, _ := json.Marshal(map[string]string{"command": longCmd})
+	entry := map[string]any{
+		"type":      "assistant",
+		"timestamp": "2026-01-01T00:00:01.000Z",
+		"message": map[string]any{
+			"role": "assistant",
+			"content": []map[string]any{
+				{"type": "tool_use", "id": "t1", "name": "Bash", "input": json.RawMessage(input)},
+			},
+		},
+	}
+	line, _ := json.Marshal(entry)
+	tr := readFromString(t, string(line)+"\n")
+	if len(tr.Messages) != 1 {
+		t.Fatalf("got %d messages, want 1", len(tr.Messages))
+	}
+	blk := tr.Messages[0].Blocks[0]
+	if len(blk.Summary) > 60 { // "Bash: " + 50 + "..."
+		t.Errorf("summary too long: %d chars: %q", len(blk.Summary), blk.Summary)
+	}
+	if !strings.HasSuffix(blk.Summary, "...") {
+		t.Errorf("expected truncated summary ending with ..., got %q", blk.Summary)
+	}
+}
+
+func TestToolSummaryError(t *testing.T) {
+	jsonl := `{"type":"assistant","timestamp":"2026-01-01T00:00:01.000Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"false"}}]}}
+{"type":"user","timestamp":"2026-01-01T00:00:02.000Z","isMeta":true,"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"<tool_use_error>command failed</tool_use_error>"}]}}
+`
+	tr := readFromString(t, jsonl)
+	blk := tr.Messages[0].Blocks[0]
+	if !strings.HasSuffix(blk.Summary, " (error)") {
+		t.Errorf("expected error suffix, got summary = %q", blk.Summary)
+	}
+}
+
+func TestToolSummaryNoResult(t *testing.T) {
+	// Tool use without any corresponding result — should still get input-based summary
+	jsonl := `{"type":"assistant","timestamp":"2026-01-01T00:00:01.000Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Read","input":{"file_path":"/tmp/foo.go"}}]}}
+`
+	tr := readFromString(t, jsonl)
+	blk := tr.Messages[0].Blocks[0]
+	if blk.Summary != "Read /tmp/foo.go" {
+		t.Errorf("summary = %q, want %q", blk.Summary, "Read /tmp/foo.go")
+	}
+}
+
+func TestToolSummaryFallback(t *testing.T) {
+	jsonl := `{"type":"assistant","timestamp":"2026-01-01T00:00:01.000Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"UnknownTool","input":{}}]}}
+`
+	tr := readFromString(t, jsonl)
+	blk := tr.Messages[0].Blocks[0]
+	if blk.Summary != "UnknownTool" {
+		t.Errorf("summary = %q, want %q", blk.Summary, "UnknownTool")
+	}
+}
+
+func TestToolSummaryLinkedFromIsMeta(t *testing.T) {
+	// The tool_result is in an isMeta entry (which parseLine filters out)
+	// but collectToolResults should still extract it
+	jsonl := `{"type":"assistant","timestamp":"2026-01-01T00:00:01.000Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"echo hello"}}]}}
+{"type":"user","timestamp":"2026-01-01T00:00:02.000Z","isMeta":true,"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"<tool_use_error>permission denied</tool_use_error>"}]}}
+`
+	tr := readFromString(t, jsonl)
+	if len(tr.Messages) != 1 {
+		t.Fatalf("got %d messages, want 1", len(tr.Messages))
+	}
+	blk := tr.Messages[0].Blocks[0]
+	if blk.Summary != "Bash: echo hello (error)" {
+		t.Errorf("summary = %q, want %q", blk.Summary, "Bash: echo hello (error)")
+	}
+}
+
+func TestShortenPath(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"/tmp/foo.go", "/tmp/foo.go"},
+		{"/a/b/c", "a/b/c"},
+		{"/home/user/src/github.com/org/project/main.go", "org/project/main.go"},
+	}
+	for _, tt := range tests {
+		got := shortenPath(tt.input)
+		if got != tt.want {
+			t.Errorf("shortenPath(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
+func TestTruncate(t *testing.T) {
+	if got := truncate("short", 10); got != "short" {
+		t.Errorf("truncate short = %q", got)
+	}
+	if got := truncate("a very long string that exceeds", 10); got != "a very lon..." {
+		t.Errorf("truncate long = %q", got)
+	}
+}
+
+func TestToolSummaryArrayContent(t *testing.T) {
+	// tool_result with array content format
+	jsonl := `{"type":"assistant","timestamp":"2026-01-01T00:00:01.000Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ls"}}]}}
+{"type":"user","timestamp":"2026-01-01T00:00:02.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":[{"type":"text","text":"<tool_use_error>not found</tool_use_error>"}]}]}}
+`
+	tr := readFromString(t, jsonl)
+	blk := tr.Messages[0].Blocks[0]
+	if !strings.HasSuffix(blk.Summary, " (error)") {
+		t.Errorf("expected error suffix for array content, got summary = %q", blk.Summary)
+	}
 }

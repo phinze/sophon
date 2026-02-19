@@ -28,6 +28,7 @@ interface WriteInput {
 interface TranscriptBlock {
   type: string;
   text: string;
+  summary?: string;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   input?: AskQuestionInput & WriteInput & Record<string, any>;
 }
@@ -133,7 +134,8 @@ function loadTranscript(): void {
           } else if (b.type === "tool_use" && b.text === "ExitPlanMode") {
             content += '<div class="tool-use plan-approval">Plan ready for approval</div>';
           } else if (b.type === "tool_use") {
-            content += '<div class="tool-use">' + escapeHtml(b.text) + "</div>";
+            const label = b.summary || b.text;
+            content += '<div class="tool-use">' + escapeHtml(label) + "</div>";
           } else {
             content += renderMarkdown(b.text);
           }
