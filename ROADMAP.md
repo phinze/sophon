@@ -47,6 +47,19 @@ Sophon is a notification + response relay for Claude Code sessions:
 This covers the core loop: Claude Code needs attention → phone buzzes → you
 respond from the web form → text lands in the terminal.
 
+### Transcript Rendering — Future Ideas
+
+Things that would improve transcript quality but aren't urgent enough to track as
+issues yet. Inspired by analysis of
+[claude-devtools](https://github.com/matt1398/claude-devtools).
+
+- **Compaction markers** — Detect `summary` type JSONL entries and insert a
+  visual divider in the transcript. Helps the mobile reviewer understand that
+  older messages are no longer in Claude's context window.
+- **Subagent rendering** — Discover `agent_*.jsonl` sidechain files and render
+  subagent work inline or as expandable sections. More relevant if/when we build
+  a richer dashboard view.
+
 ## Phase 1: Bidirectional Chat Interface
 
 **Goal:** Replace the notification-and-web-form loop with a proper
