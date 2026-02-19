@@ -1,5 +1,8 @@
 name = "sophon"
 
+[build]
+onbuild = "cd server/frontend && npm ci && npx esbuild src/respond.ts src/style.css --bundle --outdir=../static --minify --target=es2020"
+
 [services.web]
 port = 2587
 
