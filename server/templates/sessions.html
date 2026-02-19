@@ -13,7 +13,7 @@
   <h2>Active Sessions</h2>
   {{if .Active}}
     {{range .Active}}
-    <a class="card" href="{{$.BaseURL}}/sophon/respond/{{.ID}}">
+    <a class="card" href="/sophon/respond/{{.ID}}">
       <div class="card-header">
         <span class="dot {{if .NotifyMessage}}dot-waiting{{else}}dot-active{{end}}"></span>
         <span class="project-name">{{.Project}}</span>

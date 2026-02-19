@@ -30,7 +30,6 @@ var tmpl = template.Must(
 // Config holds server configuration.
 type Config struct {
 	Port          int
-	NtfyURL       string
 	BaseURL       string
 	MinSessionAge int // seconds since last activity before turn-end sends notification
 }
@@ -49,6 +48,7 @@ type Server struct {
 	logger  *slog.Logger
 	agents  *AgentRegistry
 	nodeOps NodeOps
+	events  *EventHub
 }
 
 // New creates a new Server.
@@ -58,6 +58,7 @@ func New(cfg Config, st *store.Store, logger *slog.Logger) *Server {
 		store:  st,
 		logger: logger,
 		agents: NewAgentRegistry(),
+		events: NewEventHub(),
 	}
 	s.nodeOps = &agentProxyOps{
 		agents: s.agents,
@@ -124,6 +125,7 @@ func (s *Server) Run() error {
 	mux.HandleFunc("DELETE /api/sessions/{id}", s.handleDeleteSession)
 	mux.HandleFunc("POST /api/respond/{id}", s.handleRespond)
 	mux.HandleFunc("GET /api/sessions/{id}/transcript", s.handleTranscript)
+	mux.HandleFunc("GET /api/sessions/{id}/events", s.handleSSE)
 	mux.HandleFunc("POST /api/agents/register", s.handleAgentRegister)
 
 	// Static assets
@@ -140,7 +142,7 @@ func (s *Server) Run() error {
 		fmt.Fprintln(w, "ok")
 	})
 
-	addr := fmt.Sprintf("127.0.0.1:%d", s.cfg.Port)
+	addr := fmt.Sprintf("0.0.0.0:%d", s.cfg.Port)
 	s.logger.Info("starting sophon daemon", "addr", addr)
 	return http.ListenAndServe(addr, mux)
 }
@@ -220,8 +222,6 @@ func (s *Server) handleNotify(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	previouslyNotified := !sess.NotifiedAt.IsZero()
-
 	now := time.Now()
 	sess.NotificationType = req.NotificationType
 	sess.NotifyTitle = req.Title
@@ -235,14 +235,11 @@ func (s *Server) handleNotify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Decide whether to push a notification
-	if req.NotificationType == "idle_prompt" && previouslyNotified {
-		s.logger.Info("notification suppressed (already notified)", "session_id", id, "type", req.NotificationType)
-	} else if s.nodeOps.PaneFocused(sess.NodeName, sess.TmuxPane) {
-		s.logger.Info("notification suppressed (pane focused)", "session_id", id, "type", req.NotificationType)
-	} else {
-		s.sendNotification(sess, req.NotificationType, req.Message)
-	}
+	s.events.Publish(id, Event{
+		Type:    EventNotification,
+		Session: id,
+		Data:    mustJSON(map[string]string{"type": req.NotificationType, "message": req.Message, "title": req.Title}),
+	})
 
 	s.logger.Info("notification stored", "session_id", id, "type", req.NotificationType)
 	w.WriteHeader(http.StatusOK)
@@ -280,16 +277,8 @@ func (s *Server) handleActivity(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if int(elapsed.Seconds()) >= s.cfg.MinSessionAge {
-		if s.nodeOps.PaneFocused(sess.NodeName, sess.TmuxPane) {
-			s.logger.Info("turn-end notification suppressed (pane focused)", "session_id", id)
-		} else {
-			mins := int(elapsed.Minutes())
-			tr, _ := s.nodeOps.ReadTranscript(sess.NodeName, sess.ID, sess.Cwd)
-			lastText := transcript.LastAssistantText(tr)
-			s.sendStopNotification(sess, mins, lastText)
-		}
-	}
+	s.events.Publish(id, Event{Type: EventActivity, Session: id})
+
 	s.logger.Info("turn ended", "session_id", id, "elapsed_since_last_activity", elapsed.Round(time.Second))
 
 	w.WriteHeader(http.StatusOK)
@@ -314,6 +303,8 @@ func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+
+	s.events.Publish(id, Event{Type: EventSessionEnd, Session: id})
 
 	s.logger.Info("session ended", "session_id", id)
 	w.WriteHeader(http.StatusOK)
@@ -385,6 +376,8 @@ func (s *Server) handleRespond(w http.ResponseWriter, r *http.Request) {
 	if err := s.store.UpdateSession(sess); err != nil {
 		s.logger.Error("failed to update last activity", "error", err)
 	}
+
+	s.events.Publish(id, Event{Type: EventResponse, Session: id})
 
 	s.logger.Info("response sent", "session_id", id, "pane", sess.TmuxPane, "text_len", len(req.Text))
 	w.WriteHeader(http.StatusOK)
@@ -477,6 +470,43 @@ func (s *Server) handleAgentRegister(w http.ResponseWriter, r *http.Request) {
 	s.agents.Register(req.NodeName, req.URL)
 	s.logger.Info("agent registered", "node", req.NodeName, "url", req.URL)
 	w.WriteHeader(http.StatusOK)
+}
+
+func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming not supported", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+
+	ch, unsub := s.events.Subscribe(id)
+	defer unsub()
+
+	// Send initial connection event
+	fmt.Fprintf(w, "event: connected\ndata: {}\n\n")
+	flusher.Flush()
+
+	ctx := r.Context()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case evt, ok := <-ch:
+			if !ok {
+				return
+			}
+			data, _ := json.Marshal(evt.Data)
+			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", evt.Type, data)
+			flusher.Flush()
+		}
+	}
 }
 
 func timeAgo(t time.Time) string {

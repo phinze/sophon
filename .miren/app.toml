@@ -1,0 +1,7 @@
+[services.web]
+port = 2587
+
+[[services.web.disks]]
+name = "sophon-data"
+mount_path = "/miren/data/local"
+size_gb = 1

@@ -23,7 +23,6 @@ type HookEvent struct {
 // Config holds hook configuration.
 type Config struct {
 	DaemonURL     string
-	NtfyURL       string
 	NodeName      string
 	MinSessionAge int
 }
@@ -87,12 +86,7 @@ func handleNotification(cfg Config, event HookEvent) error {
 		"node_name":         cfg.NodeName,
 	}
 
-	err := postJSON(cfg.DaemonURL+"/api/sessions/"+event.SessionID+"/notify", body)
-	if err != nil {
-		// Fallback: send ntfy directly if daemon is unreachable
-		return sendNtfyDirect(cfg, event)
-	}
-	return nil
+	return postJSON(cfg.DaemonURL+"/api/sessions/"+event.SessionID+"/notify", body)
 }
 
 func handleTurnEnd(cfg Config, event HookEvent) error {
@@ -142,44 +136,6 @@ func postJSON(url string, body interface{}) error {
 	if resp.StatusCode >= 400 {
 		return fmt.Errorf("daemon returned %d", resp.StatusCode)
 	}
-	return nil
-}
-
-// sendNtfyDirect sends a notification directly to ntfy as a fallback.
-func sendNtfyDirect(cfg Config, event HookEvent) error {
-	if cfg.NtfyURL == "" {
-		return nil
-	}
-
-	project := projectFromCwd(event.Cwd)
-
-	var title, priority, tags string
-	switch event.NotificationType {
-	case "permission_prompt":
-		title = fmt.Sprintf("[%s] Needs approval", project)
-		priority = "high"
-		tags = "lock"
-	default:
-		title = fmt.Sprintf("[%s] Waiting for input", project)
-		priority = "default"
-		tags = "hourglass_flowing_sand"
-	}
-
-	req, err := http.NewRequest("POST", cfg.NtfyURL, strings.NewReader(event.Message))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Title", title)
-	req.Header.Set("Priority", priority)
-	req.Header.Set("Tags", tags)
-
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		// Best effort - don't fail the hook
-		return nil
-	}
-	resp.Body.Close()
 	return nil
 }
 

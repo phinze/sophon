@@ -14,7 +14,6 @@ import (
 func runDaemon(args []string) error {
 	fs := flag.NewFlagSet("daemon", flag.ExitOnError)
 	port := fs.Int("port", 2587, "listen port")
-	ntfyURL := fs.String("ntfy-url", "", "ntfy server URL (e.g. https://host/topic)")
 	baseURL := fs.String("base-url", "", "public base URL for sophon (e.g. https://host)")
 	minAge := fs.Int("min-session-age", 120, "minimum session age in seconds before stop notifications")
 	logLevel := fs.String("log-level", "info", "log level (debug, info, warn, error)")
@@ -24,17 +23,8 @@ func runDaemon(args []string) error {
 	}
 
 	// Environment variable fallbacks
-	if *ntfyURL == "" {
-		*ntfyURL = os.Getenv("SOPHON_NTFY_URL")
-	}
 	if *baseURL == "" {
 		*baseURL = os.Getenv("SOPHON_BASE_URL")
-	}
-	if *ntfyURL == "" {
-		return fmt.Errorf("--ntfy-url or SOPHON_NTFY_URL is required")
-	}
-	if *baseURL == "" {
-		return fmt.Errorf("--base-url or SOPHON_BASE_URL is required")
 	}
 
 	level := slog.LevelInfo
@@ -65,7 +55,6 @@ func runDaemon(args []string) error {
 
 	cfg := server.Config{
 		Port:          *port,
-		NtfyURL:       *ntfyURL,
 		BaseURL:       *baseURL,
 		MinSessionAge: *minAge,
 	}
@@ -83,6 +72,14 @@ func defaultClaudeDir() string {
 }
 
 func defaultDataDir() string {
+	// Miren deployment: use persistent disk
+	if os.Getenv("MIREN_VERSION") != "" {
+		return "/miren/data/local/sophon"
+	}
+	if info, err := os.Stat("/miren/data/local"); err == nil && info.IsDir() {
+		return "/miren/data/local/sophon"
+	}
+
 	if dir := os.Getenv("XDG_DATA_HOME"); dir != "" {
 		return filepath.Join(dir, "sophon")
 	}
