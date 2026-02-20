@@ -130,14 +130,14 @@ func (s *Server) Run() error {
 
 	// Static assets
 	staticSub, _ := fs.Sub(staticFS, "static")
-	mux.Handle("GET /sophon/static/", http.StripPrefix("/sophon/static/", http.FileServerFS(staticSub)))
+	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServerFS(staticSub)))
 
 	// Web UI
-	mux.HandleFunc("GET /sophon/respond/{id}", s.handleRespondPage)
-	mux.HandleFunc("GET /sophon/", s.handleSessionsPage)
+	mux.HandleFunc("GET /respond/{id}", s.handleRespondPage)
+	mux.HandleFunc("GET /", s.handleSessionsPage)
 
 	// Health check
-	mux.HandleFunc("GET /sophon/health", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprintln(w, "ok")
 	})
