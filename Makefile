@@ -1,7 +1,7 @@
 .PHONY: build test clean frontend dev-frontend
 
 frontend:
-	cd server/frontend && npm ci && npx esbuild src/respond.ts src/style.css \
+	cd server/frontend && npm ci && npx esbuild src/respond.ts src/sessions.ts src/style.css \
 		--bundle --outdir=../static --minify --target=es2020
 
 build: frontend
@@ -15,5 +15,5 @@ clean:
 	rm -f server/static/*.js server/static/*.css server/static/*.map
 
 dev-frontend:
-	cd server/frontend && npx esbuild src/respond.ts src/style.css \
+	cd server/frontend && npx esbuild src/respond.ts src/sessions.ts src/style.css \
 		--bundle --outdir=../static --target=es2020 --watch

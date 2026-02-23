@@ -126,6 +126,8 @@ func (s *Server) Run() error {
 	mux.HandleFunc("POST /api/respond/{id}", s.handleRespond)
 	mux.HandleFunc("GET /api/sessions/{id}/transcript", s.handleTranscript)
 	mux.HandleFunc("GET /api/sessions/{id}/events", s.handleSSE)
+	mux.HandleFunc("GET /api/events", s.handleGlobalSSE)
+	mux.HandleFunc("GET /api/sessions", s.handleSessionsAPI)
 	mux.HandleFunc("POST /api/agents/register", s.handleAgentRegister)
 
 	// Static assets
@@ -177,6 +179,8 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+
+	s.events.Publish(req.SessionID, Event{Type: EventSessionStart, Session: req.SessionID})
 
 	s.logger.Info("session registered", "session_id", req.SessionID, "project", project, "pane", req.TmuxPane)
 	w.WriteHeader(http.StatusCreated)
@@ -507,6 +511,62 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 			flusher.Flush()
 		}
 	}
+}
+
+func (s *Server) handleGlobalSSE(w http.ResponseWriter, r *http.Request) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming not supported", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+
+	ch, unsub := s.events.SubscribeGlobal()
+	defer unsub()
+
+	fmt.Fprintf(w, "event: connected\ndata: {}\n\n")
+	flusher.Flush()
+
+	ctx := r.Context()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case evt, ok := <-ch:
+			if !ok {
+				return
+			}
+			data, _ := json.Marshal(evt)
+			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", evt.Type, data)
+			flusher.Flush()
+		}
+	}
+}
+
+func (s *Server) handleSessionsAPI(w http.ResponseWriter, r *http.Request) {
+	active, err := s.store.ListActiveSessions()
+	if err != nil {
+		s.logger.Error("failed to list active sessions", "error", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	recent, err := s.store.ListRecentSessions(20)
+	if err != nil {
+		s.logger.Error("failed to list recent sessions", "error", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"active": active,
+		"recent": recent,
+	})
 }
 
 func timeAgo(t time.Time) string {

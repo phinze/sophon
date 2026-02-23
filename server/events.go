@@ -9,11 +9,15 @@ import (
 type EventType string
 
 const (
-	EventNotification EventType = "notification"
-	EventActivity     EventType = "activity"
-	EventSessionEnd   EventType = "session_end"
-	EventResponse     EventType = "response"
+	EventNotification  EventType = "notification"
+	EventActivity      EventType = "activity"
+	EventSessionEnd    EventType = "session_end"
+	EventSessionStart  EventType = "session_start"
+	EventResponse      EventType = "response"
 )
+
+// globalKey is the sentinel subscription key for global (all-session) subscribers.
+const globalKey = ""
 
 // Event is a single server-sent event.
 type Event struct {
@@ -33,6 +37,12 @@ func NewEventHub() *EventHub {
 	return &EventHub{
 		subs: make(map[string]map[chan Event]struct{}),
 	}
+}
+
+// SubscribeGlobal returns a channel that receives events for all sessions and
+// an unsubscribe function. The caller must call the returned function when done.
+func (h *EventHub) SubscribeGlobal() (<-chan Event, func()) {
+	return h.Subscribe(globalKey)
 }
 
 // Subscribe returns a channel that receives events for the given session and
@@ -59,14 +69,19 @@ func (h *EventHub) Subscribe(sessionID string) (<-chan Event, func()) {
 	return ch, unsub
 }
 
-// Publish sends an event to all subscribers for the given session.
-// If a subscriber's buffer is full the event is dropped (non-blocking).
+// Publish sends an event to all subscribers for the given session and to
+// all global subscribers. If a subscriber's buffer is full the event is
+// dropped (non-blocking).
 func (h *EventHub) Publish(sessionID string, evt Event) {
 	h.mu.Lock()
-	subscribers := h.subs[sessionID]
-	// Copy the set under lock so we can send without holding it.
-	chs := make([]chan Event, 0, len(subscribers))
-	for ch := range subscribers {
+	// Collect session-specific and global subscribers under lock.
+	sessionSubs := h.subs[sessionID]
+	globalSubs := h.subs[globalKey]
+	chs := make([]chan Event, 0, len(sessionSubs)+len(globalSubs))
+	for ch := range sessionSubs {
+		chs = append(chs, ch)
+	}
+	for ch := range globalSubs {
 		chs = append(chs, ch)
 	}
 	h.mu.Unlock()

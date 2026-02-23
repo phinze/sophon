@@ -11,6 +11,7 @@
   <h1>sophon</h1>
 
   <h2>Active Sessions</h2>
+  <div id="active-sessions">
   {{if .Active}}
     {{range .Active}}
     <a class="card" href="/respond/{{.ID}}">
@@ -30,8 +31,10 @@
   {{else}}
     <div class="empty">No active sessions</div>
   {{end}}
+  </div>
 
   <h2>Recent Sessions</h2>
+  <div id="recent-sessions">
   {{if .Recent}}
     {{range .Recent}}
     <div class="card">
@@ -46,6 +49,10 @@
   {{else}}
     <div class="empty">No recent sessions</div>
   {{end}}
+  </div>
 </div>
+
+<script>window.__SOPHON__ = { apiBase: '' };</script>
+<script src="/static/sessions.js"></script>
 </body>
 </html>

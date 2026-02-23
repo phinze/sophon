@@ -2,8 +2,8 @@
   "name": "sophon-frontend",
   "private": true,
   "scripts": {
-    "build": "esbuild src/respond.ts src/style.css --bundle --outdir=../static --minify --target=es2020",
-    "watch": "esbuild src/respond.ts src/style.css --bundle --outdir=../static --target=es2020 --watch"
+    "build": "esbuild src/respond.ts src/sessions.ts src/style.css --bundle --outdir=../static --minify --target=es2020",
+    "watch": "esbuild src/respond.ts src/sessions.ts src/style.css --bundle --outdir=../static --target=es2020 --watch"
   },
   "dependencies": {
     "marked": "^15.0.0"
