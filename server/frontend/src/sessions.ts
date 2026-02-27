@@ -155,6 +155,10 @@ function connectSSE(): void {
   evtSource.addEventListener("activity", () => {
     refreshSessions();
   });
+
+  window.addEventListener("beforeunload", () => {
+    evtSource.close();
+  });
 }
 
 requestNotificationPermission();

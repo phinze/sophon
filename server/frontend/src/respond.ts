@@ -167,6 +167,10 @@ function connectSSE(): void {
     showStatus("Session ended", true);
     evtSource.close();
   });
+
+  window.addEventListener("beforeunload", () => {
+    evtSource.close();
+  });
 }
 
 // Expose for inline onclick/onkeydown handlers in template
