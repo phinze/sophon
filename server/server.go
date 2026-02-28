@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"html/template"
 	"io/fs"
 	"log/slog"
 	"net/http"
@@ -21,11 +20,15 @@ var templateFS embed.FS
 //go:embed all:static
 var staticFS embed.FS
 
-var tmpl = template.Must(
-	template.New("").Funcs(template.FuncMap{
-		"timeAgo": timeAgo,
-	}).ParseFS(templateFS, "templates/*.html"),
-)
+var appHTML []byte
+
+func init() {
+	var err error
+	appHTML, err = templateFS.ReadFile("templates/app.html")
+	if err != nil {
+		panic("missing templates/app.html: " + err.Error())
+	}
+}
 
 // Config holds server configuration.
 type Config struct {
@@ -127,6 +130,7 @@ func (s *Server) Run() error {
 	mux.HandleFunc("GET /api/sessions/{id}/transcript", s.handleTranscript)
 	mux.HandleFunc("GET /api/sessions/{id}/events", s.handleSSE)
 	mux.HandleFunc("GET /api/events", s.handleGlobalSSE)
+	mux.HandleFunc("GET /api/sessions/{id}", s.handleGetSession)
 	mux.HandleFunc("GET /api/sessions", s.handleSessionsAPI)
 	mux.HandleFunc("POST /api/agents/register", s.handleAgentRegister)
 
@@ -134,9 +138,9 @@ func (s *Server) Run() error {
 	staticSub, _ := fs.Sub(staticFS, "static")
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServerFS(staticSub)))
 
-	// Web UI
-	mux.HandleFunc("GET /respond/{id}", s.handleRespondPage)
-	mux.HandleFunc("GET /", s.handleSessionsPage)
+	// Web UI — SPA catch-all
+	mux.HandleFunc("GET /respond/{id}", s.handleSPA)
+	mux.HandleFunc("GET /", s.handleSPA)
 
 	// Health check
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
@@ -314,38 +318,9 @@ func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-type respondPageData struct {
-	Session *store.Session
-	BaseURL string
-	TimeAgo string
-	HasPerm bool
-}
-
-func (s *Server) handleRespondPage(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-
-	sess, err := s.store.GetSession(id)
-	if errors.Is(err, store.ErrNotFound) {
-		http.Error(w, "session not found", http.StatusNotFound)
-		return
-	} else if err != nil {
-		s.logger.Error("failed to get session", "error", err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-
-	data := respondPageData{
-		Session: sess,
-		BaseURL: s.cfg.BaseURL,
-		TimeAgo: timeAgo(sess.NotifiedAt),
-		HasPerm: sess.NotificationType == "permission_prompt",
-	}
-
+func (s *Server) handleSPA(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := tmpl.ExecuteTemplate(w, "respond.html", data); err != nil {
-		s.logger.Error("template render failed", "error", err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
-	}
+	w.Write(appHTML)
 }
 
 func (s *Server) handleRespond(w http.ResponseWriter, r *http.Request) {
@@ -386,40 +361,6 @@ func (s *Server) handleRespond(w http.ResponseWriter, r *http.Request) {
 	s.logger.Info("response sent", "session_id", id, "pane", sess.TmuxPane, "text_len", len(req.Text))
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{"status": "sent"})
-}
-
-type sessionsPageData struct {
-	Active  []*store.Session
-	Recent  []*store.Session
-	BaseURL string
-}
-
-func (s *Server) handleSessionsPage(w http.ResponseWriter, r *http.Request) {
-	active, err := s.store.ListActiveSessions()
-	if err != nil {
-		s.logger.Error("failed to list active sessions", "error", err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-
-	recent, err := s.store.ListRecentSessions(20)
-	if err != nil {
-		s.logger.Error("failed to list recent sessions", "error", err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-
-	data := sessionsPageData{
-		Active:  active,
-		Recent:  recent,
-		BaseURL: s.cfg.BaseURL,
-	}
-
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := tmpl.ExecuteTemplate(w, "sessions.html", data); err != nil {
-		s.logger.Error("template render failed", "error", err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
-	}
 }
 
 func (s *Server) handleTranscript(w http.ResponseWriter, r *http.Request) {
@@ -569,25 +510,20 @@ func (s *Server) handleSessionsAPI(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func timeAgo(t time.Time) string {
-	if t.IsZero() {
-		return "just now"
+func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+
+	sess, err := s.store.GetSession(id)
+	if errors.Is(err, store.ErrNotFound) {
+		http.Error(w, "session not found", http.StatusNotFound)
+		return
+	} else if err != nil {
+		s.logger.Error("failed to get session", "error", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
 	}
-	d := time.Since(t)
-	switch {
-	case d < time.Minute:
-		return "just now"
-	case d < time.Hour:
-		m := int(d.Minutes())
-		if m == 1 {
-			return "1m ago"
-		}
-		return fmt.Sprintf("%dm ago", m)
-	default:
-		h := int(d.Hours())
-		if h == 1 {
-			return "1h ago"
-		}
-		return fmt.Sprintf("%dh ago", h)
-	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(sess)
 }
+

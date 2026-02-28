@@ -340,6 +340,40 @@ func TestNodeNameStoredOnCreate(t *testing.T) {
 	}
 }
 
+func TestGetSession(t *testing.T) {
+	h := newTestHarness(t)
+
+	// 404 for non-existent session
+	req := httptest.NewRequest("GET", "/api/sessions/nope", nil)
+	req.SetPathValue("id", "nope")
+	w := httptest.NewRecorder()
+	h.server.handleGetSession(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("got %d, want 404", w.Code)
+	}
+
+	// Create session and fetch it
+	h.createSession(t, "s1", "%5", "/home/user/project")
+
+	req = httptest.NewRequest("GET", "/api/sessions/s1", nil)
+	req.SetPathValue("id", "s1")
+	w = httptest.NewRecorder()
+	h.server.handleGetSession(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("got %d, want 200", w.Code)
+	}
+
+	var sess store.Session
+	json.NewDecoder(w.Body).Decode(&sess)
+	if sess.ID != "s1" {
+		t.Errorf("session ID = %q, want %q", sess.ID, "s1")
+	}
+	if sess.Project != "user/project" {
+		t.Errorf("Project = %q, want %q", sess.Project, "user/project")
+	}
+}
+
 func TestAgentRegister(t *testing.T) {
 	h := newTestHarness(t)
 
