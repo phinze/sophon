@@ -54,6 +54,18 @@ func TestHasClaudeDescendantDirectChild(t *testing.T) {
 	}
 }
 
+func TestHasClaudeDescendantWrappedBinary(t *testing.T) {
+	// On NixOS, claude's comm name is ".claude-unwrapp" (truncated)
+	procs := []process{
+		{pid: 100, ppid: 1, comm: "fish"},
+		{pid: 200, ppid: 100, comm: ".claude-unwrapp"},
+	}
+
+	if !hasClaudeDescendant(100, procs) {
+		t.Error("expected wrapped claude descendant of 100")
+	}
+}
+
 func TestParseTmuxPanes(t *testing.T) {
 	input := "%0 100\n%1 200\n%5 500\n"
 	panes := parseTmuxPanes(input)

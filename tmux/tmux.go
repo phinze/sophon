@@ -76,7 +76,7 @@ func hasClaudeDescendant(paneShellPID int, procs []process) bool {
 	for len(queue) > 0 {
 		pid := queue[0]
 		queue = queue[1:]
-		if commByPid[pid] == "claude" {
+		if strings.Contains(commByPid[pid], "claude") {
 			return true
 		}
 		queue = append(queue, children[pid]...)
