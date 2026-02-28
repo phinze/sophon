@@ -19,7 +19,7 @@ let
     npmDepsHash = "sha256-8SoYDeQSllo/1bGQgl3iiJfZ/dviQFYVuVzpOJM3L50=";
     dontNpmBuild = true;
     buildPhase = ''
-      npx esbuild src/respond.ts src/sessions.ts src/style.css \
+      npx esbuild src/app.ts src/style.css \
         --bundle --outdir=$out --minify --target=es2020
     '';
     installPhase = ''
@@ -39,8 +39,7 @@ buildGoModule {
   env.CGO_ENABLED = "0";
 
   preBuild = ''
-    cp ${frontend}/respond.js server/static/
-    cp ${frontend}/sessions.js server/static/
+    cp ${frontend}/app.js server/static/
     cp ${frontend}/style.css server/static/
   '';
 
