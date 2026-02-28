@@ -35,6 +35,33 @@ echo '{"hook_event_name":"Notification","session_id":"test1","notification_type"
 echo '{"hook_event_name":"Stop","session_id":"test1"}' | sophon hook --node-name myhost
 ```
 
+## Deploying
+
+Two components deploy independently:
+
+### Daemon (Miren)
+
+The daemon runs on miren01 via [Miren](https://miren.md/). URL: https://sophon.miren01.versa.inze.ph
+
+```bash
+miren cluster switch miren01  # ensure correct cluster is targeted
+miren deploy                  # build + deploy from working directory
+miren logs                    # view logs
+miren app status              # check deployment status
+miren rollback                # revert to previous version
+```
+
+### Agent (Nix)
+
+The agent runs on each node via the home-manager module. Update it through `../nix-config`:
+
+```bash
+cd ../nix-config
+./scripts/update-flake-input -y sophon   # update flake input + commit
+nh os switch .                           # apply on NixOS
+nh darwin switch .                       # apply on macOS
+```
+
 ## Nix Integration
 
 The flake exports `homeManagerModules.default` for declarative configuration including systemd services (daemon + agent) and Claude Code hook wiring.
