@@ -268,6 +268,41 @@ func TestReadExitPlanModePreservesWriteInput(t *testing.T) {
 	}
 }
 
+func TestReadExitPlanModePreservesWriteInputCrossMessage(t *testing.T) {
+	// Write tool and ExitPlanMode in different assistant messages (common case:
+	// Claude writes the plan file, gets the result, then calls ExitPlanMode).
+	lines := `{"type":"assistant","timestamp":"2026-01-01T00:00:01.000Z","message":{"role":"assistant","content":[{"type":"text","text":"Here is the plan."},{"type":"tool_use","id":"t1","name":"Write","input":{"file_path":"/tmp/plan.md","content":"## Plan\n\nStep 1: Do the thing."}}]}}
+{"type":"user","timestamp":"2026-01-01T00:00:02.000Z","isMeta":true,"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}}
+{"type":"assistant","timestamp":"2026-01-01T00:00:03.000Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"t2","name":"ExitPlanMode","input":{}}]}}
+`
+	tr := readFromString(t, lines)
+	// Expected: 2 assistant messages (tool_result user is filtered)
+	if len(tr.Messages) != 2 {
+		t.Fatalf("got %d messages, want 2", len(tr.Messages))
+	}
+
+	// Write input should be preserved even though ExitPlanMode is in a different message
+	writeBlock := tr.Messages[0].Blocks[1]
+	if writeBlock.Text != "Write" {
+		t.Errorf("block 1 text = %q, want Write", writeBlock.Text)
+	}
+	if writeBlock.Input == nil {
+		t.Fatal("Write input should be preserved when ExitPlanMode is in a subsequent message")
+	}
+	var writeInput map[string]interface{}
+	if err := json.Unmarshal(writeBlock.Input, &writeInput); err != nil {
+		t.Fatalf("failed to parse Write input: %v", err)
+	}
+	if writeInput["content"] != "## Plan\n\nStep 1: Do the thing." {
+		t.Errorf("Write content = %v", writeInput["content"])
+	}
+
+	// ExitPlanMode block should be present in second message
+	if tr.Messages[1].Blocks[0].Text != "ExitPlanMode" {
+		t.Errorf("msg 1 block 0 text = %q, want ExitPlanMode", tr.Messages[1].Blocks[0].Text)
+	}
+}
+
 func TestReadWriteWithoutExitPlanModeOmitsInput(t *testing.T) {
 	jsonl := `{"type":"assistant","timestamp":"2026-01-01T00:00:01.000Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Write","input":{"file_path":"/tmp/foo.go","content":"package main"}}]}}` + "\n"
 

@@ -72,6 +72,7 @@ func Read(path string) (*Transcript, error) {
 		return nil, err
 	}
 
+	preservePlanWriteInputs(messages)
 	attachSummaries(messages, toolResults)
 	return &Transcript{Messages: messages}, nil
 }
@@ -354,6 +355,45 @@ func attachSummaries(messages []Message, toolResults map[string]string) {
 				}
 			}
 			blk.Summary = summary
+		}
+	}
+}
+
+// preservePlanWriteInputs scans for ExitPlanMode tool calls and looks backwards
+// to find Write blocks in preceding assistant messages, preserving their input
+// so the plan content can be displayed. This handles the common case where the
+// Write (plan file) and ExitPlanMode are in separate messages.
+func preservePlanWriteInputs(messages []Message) {
+	for i, msg := range messages {
+		if msg.Role != "assistant" {
+			continue
+		}
+		hasExitPlanMode := false
+		for _, blk := range msg.Blocks {
+			if blk.Type == "tool_use" && blk.Text == "ExitPlanMode" {
+				hasExitPlanMode = true
+				break
+			}
+		}
+		if !hasExitPlanMode {
+			continue
+		}
+		// Scan backwards for the nearest assistant message with Write blocks.
+		for j := i - 1; j >= 0; j-- {
+			if messages[j].Role != "assistant" {
+				continue
+			}
+			found := false
+			for k := range messages[j].Blocks {
+				blk := &messages[j].Blocks[k]
+				if blk.Type == "tool_use" && blk.Text == "Write" && len(blk.toolInput) > 0 && len(blk.Input) == 0 {
+					blk.Input = blk.toolInput
+					found = true
+				}
+			}
+			if found {
+				break
+			}
 		}
 	}
 }
