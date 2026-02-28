@@ -117,7 +117,8 @@ export function mount(params: Record<string, string>, sse: SSEManager): void {
       const app = document.getElementById("app")!;
       const hasPerm = sess.notification_type === "permission_prompt";
 
-      let html = '<div class="project">' + escapeHtml(sess.project) + "</div>";
+      let html = '<a href="/" class="back-link">&larr; Sessions</a>';
+      html += '<div class="project">' + escapeHtml(sess.project) + "</div>";
       html += '<div id="conversation"></div>';
 
       if (sess.notify_message) {

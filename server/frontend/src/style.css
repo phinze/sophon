@@ -11,6 +11,14 @@ body {
 body[data-page="sessions"] .container { max-width: 600px; }
 
 /* Respond page */
+.back-link {
+  display: inline-block;
+  font-size: 13px;
+  color: #7799dd;
+  text-decoration: none;
+  margin-bottom: 12px;
+}
+.back-link:hover { text-decoration: underline; }
 .project {
   font-size: 14px;
   color: #8888aa;
