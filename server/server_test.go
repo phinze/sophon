@@ -374,6 +374,162 @@ func TestGetSession(t *testing.T) {
 	}
 }
 
+func TestSamePaneDedup(t *testing.T) {
+	h := newTestHarness(t)
+
+	// Create two sessions on the same pane
+	h.createSession(t, "s1", "%5", "/home/user/project")
+	h.createSession(t, "s2", "%5", "/home/user/project")
+
+	// s1 should be auto-stopped
+	s1, _ := h.store.GetSession("s1")
+	if s1.StoppedAt.IsZero() {
+		t.Error("s1 should be auto-stopped when s2 starts on same pane")
+	}
+
+	// s2 should still be active
+	s2, _ := h.store.GetSession("s2")
+	if !s2.StoppedAt.IsZero() {
+		t.Error("s2 should still be active")
+	}
+
+	// Different pane should not be affected
+	h.createSession(t, "s3", "%10", "/home/user/project")
+	s2, _ = h.store.GetSession("s2")
+	if !s2.StoppedAt.IsZero() {
+		t.Error("s2 should not be stopped by s3 on different pane")
+	}
+}
+
+func TestReconcileSessionsStopsDeadPanes(t *testing.T) {
+	h := newTestHarness(t)
+
+	h.createSession(t, "alive", "%0", "/home/user/proj")
+	h.createSession(t, "dead1", "%1", "/home/user/proj")
+	h.createSession(t, "dead2", "%2", "/home/user/proj")
+	h.createSession(t, "no-pane", "", "/home/user/proj") // no pane, should be left alone
+
+	// Reconcile: only %0 is alive
+	h.server.reconcileSessions("test-node", []string{"%0"})
+
+	alive, _ := h.store.GetSession("alive")
+	if !alive.StoppedAt.IsZero() {
+		t.Error("alive session should not be stopped")
+	}
+
+	dead1, _ := h.store.GetSession("dead1")
+	if dead1.StoppedAt.IsZero() {
+		t.Error("dead1 should be stopped")
+	}
+
+	dead2, _ := h.store.GetSession("dead2")
+	if dead2.StoppedAt.IsZero() {
+		t.Error("dead2 should be stopped")
+	}
+
+	nopane, _ := h.store.GetSession("no-pane")
+	if !nopane.StoppedAt.IsZero() {
+		t.Error("no-pane session should not be stopped")
+	}
+}
+
+func TestReconcileSessionsEmptyAlivePanesStopsAll(t *testing.T) {
+	h := newTestHarness(t)
+
+	h.createSession(t, "s1", "%0", "/home/user/proj")
+	h.createSession(t, "s2", "%1", "/home/user/proj")
+
+	h.server.reconcileSessions("test-node", []string{})
+
+	s1, _ := h.store.GetSession("s1")
+	s2, _ := h.store.GetSession("s2")
+	if s1.StoppedAt.IsZero() || s2.StoppedAt.IsZero() {
+		t.Error("all sessions should be stopped when alive panes is empty")
+	}
+}
+
+func TestReconcileOnlyAffectsTargetNode(t *testing.T) {
+	h := newTestHarness(t)
+
+	// Create session on different node
+	sess := &store.Session{
+		ID:        "other-node-sess",
+		TmuxPane:  "%5",
+		NodeName:  "other-node",
+		StartedAt: time.Now(),
+	}
+	h.store.CreateSession(sess)
+
+	h.createSession(t, "test-sess", "%0", "/home/user/proj")
+
+	// Reconcile test-node with no alive panes
+	h.server.reconcileSessions("test-node", []string{})
+
+	other, _ := h.store.GetSession("other-node-sess")
+	if !other.StoppedAt.IsZero() {
+		t.Error("session on other node should not be affected")
+	}
+
+	testSess, _ := h.store.GetSession("test-sess")
+	if testSess.StoppedAt.IsZero() {
+		t.Error("session on test-node should be stopped")
+	}
+}
+
+func TestAgentRegisterWithAlivePanes(t *testing.T) {
+	h := newTestHarness(t)
+
+	h.createSession(t, "s1", "%0", "/home/user/proj")
+	h.createSession(t, "s2", "%1", "/home/user/proj")
+
+	// Register agent with alive_panes reporting only %0
+	body, _ := json.Marshal(map[string]any{
+		"node_name":   "test-node",
+		"url":         "http://127.0.0.1:2588",
+		"alive_panes": []string{"%0"},
+	})
+	req := httptest.NewRequest("POST", "/api/agents/register", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	h.server.handleAgentRegister(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("got %d, want 200", w.Code)
+	}
+
+	s1, _ := h.store.GetSession("s1")
+	if !s1.StoppedAt.IsZero() {
+		t.Error("s1 should still be active")
+	}
+	s2, _ := h.store.GetSession("s2")
+	if s2.StoppedAt.IsZero() {
+		t.Error("s2 should be stopped by reconciliation")
+	}
+}
+
+func TestAgentRegisterWithoutAlivePanesSkipsReconciliation(t *testing.T) {
+	h := newTestHarness(t)
+
+	h.createSession(t, "s1", "%0", "/home/user/proj")
+
+	// Register without alive_panes
+	body, _ := json.Marshal(map[string]string{
+		"node_name": "test-node",
+		"url":       "http://127.0.0.1:2588",
+	})
+	req := httptest.NewRequest("POST", "/api/agents/register", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	h.server.handleAgentRegister(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("got %d, want 200", w.Code)
+	}
+
+	s1, _ := h.store.GetSession("s1")
+	if !s1.StoppedAt.IsZero() {
+		t.Error("s1 should still be active when alive_panes is omitted")
+	}
+}
+
 func TestAgentRegister(t *testing.T) {
 	h := newTestHarness(t)
 

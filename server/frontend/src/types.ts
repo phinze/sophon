@@ -10,6 +10,7 @@ export interface Session {
   notified_at?: string;
   tmux_pane?: string;
   cwd?: string;
+  agent_online?: boolean;
 }
 
 export interface SessionsResponse {

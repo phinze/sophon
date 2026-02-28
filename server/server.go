@@ -184,6 +184,18 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Same-pane dedup: stop prior active sessions on the same node+pane
+	if req.TmuxPane != "" {
+		stopped, err := s.store.StopSessionsByPane(req.NodeName, req.TmuxPane, req.SessionID)
+		if err != nil {
+			s.logger.Error("failed to dedup same-pane sessions", "error", err)
+		}
+		for _, id := range stopped {
+			s.events.Publish(id, Event{Type: EventSessionEnd, Session: id})
+			s.logger.Info("auto-stopped same-pane session", "stopped_id", id, "new_id", req.SessionID)
+		}
+	}
+
 	s.events.Publish(req.SessionID, Event{Type: EventSessionStart, Session: req.SessionID})
 
 	s.logger.Info("session registered", "session_id", req.SessionID, "project", project, "pane", req.TmuxPane)
@@ -404,8 +416,9 @@ func (s *Server) reapSessions() {
 
 func (s *Server) handleAgentRegister(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		NodeName string `json:"node_name"`
-		URL      string `json:"url"`
+		NodeName   string   `json:"node_name"`
+		URL        string   `json:"url"`
+		AlivePanes *[]string `json:"alive_panes,omitempty"` // nil = agent couldn't check
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
@@ -413,8 +426,52 @@ func (s *Server) handleAgentRegister(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.agents.Register(req.NodeName, req.URL)
-	s.logger.Info("agent registered", "node", req.NodeName, "url", req.URL)
+
+	// Reconcile sessions if agent reported alive panes
+	if req.AlivePanes != nil {
+		s.reconcileSessions(req.NodeName, *req.AlivePanes)
+	}
+
+	s.logger.Debug("agent registered", "node", req.NodeName, "url", req.URL)
 	w.WriteHeader(http.StatusOK)
+}
+
+// reconcileSessions stops active sessions whose tmux pane is not in the alive set.
+func (s *Server) reconcileSessions(nodeName string, alivePanes []string) {
+	aliveSet := make(map[string]bool, len(alivePanes))
+	for _, p := range alivePanes {
+		aliveSet[p] = true
+	}
+
+	sessions, err := s.store.ListActiveSessionsByNode(nodeName)
+	if err != nil {
+		s.logger.Error("failed to list sessions for reconciliation", "error", err, "node", nodeName)
+		return
+	}
+
+	var toStop []string
+	for _, sess := range sessions {
+		if sess.TmuxPane == "" {
+			continue // can't reconcile sessions without pane info
+		}
+		if !aliveSet[sess.TmuxPane] {
+			toStop = append(toStop, sess.ID)
+		}
+	}
+
+	if len(toStop) == 0 {
+		return
+	}
+
+	if err := s.store.StopSessions(toStop); err != nil {
+		s.logger.Error("failed to stop reconciled sessions", "error", err)
+		return
+	}
+
+	for _, id := range toStop {
+		s.events.Publish(id, Event{Type: EventSessionEnd, Session: id})
+		s.logger.Info("session reconciled (claude not running)", "session_id", id, "node", nodeName)
+	}
 }
 
 func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
@@ -488,6 +545,12 @@ func (s *Server) handleGlobalSSE(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// sessionResponse extends Session with agent health info for the API.
+type sessionResponse struct {
+	*store.Session
+	AgentOnline *bool `json:"agent_online,omitempty"` // only set for active sessions
+}
+
 func (s *Server) handleSessionsAPI(w http.ResponseWriter, r *http.Request) {
 	active, err := s.store.ListActiveSessions()
 	if err != nil {
@@ -503,9 +566,16 @@ func (s *Server) handleSessionsAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Enrich active sessions with agent_online status
+	activeResp := make([]sessionResponse, len(active))
+	for i, sess := range active {
+		online := s.agents.IsHealthy(sess.NodeName)
+		activeResp[i] = sessionResponse{Session: sess, AgentOnline: &online}
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
-		"active": active,
+		"active": activeResp,
 		"recent": recent,
 	})
 }

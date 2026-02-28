@@ -273,6 +273,143 @@ func TestProjectFromCwd(t *testing.T) {
 	}
 }
 
+func TestListActiveSessionsByNode(t *testing.T) {
+	s := openTestStore(t)
+	now := time.Now().Truncate(time.Second)
+
+	// Create sessions on different nodes, one stopped
+	sessions := []struct {
+		id, node string
+		stopped  bool
+	}{
+		{"a", "node1", false},
+		{"b", "node1", false},
+		{"c", "node2", false},
+		{"d", "node1", true},
+	}
+	for i, tc := range sessions {
+		sess := &Session{
+			ID:        tc.id,
+			NodeName:  tc.node,
+			StartedAt: now.Add(time.Duration(i) * time.Minute),
+		}
+		if tc.stopped {
+			sess.StoppedAt = now.Add(5 * time.Minute)
+		}
+		if err := s.CreateSession(sess); err != nil {
+			t.Fatalf("CreateSession(%s): %v", tc.id, err)
+		}
+	}
+
+	got, err := s.ListActiveSessionsByNode("node1")
+	if err != nil {
+		t.Fatalf("ListActiveSessionsByNode: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("len = %d, want 2", len(got))
+	}
+	// DESC order
+	if got[0].ID != "b" || got[1].ID != "a" {
+		t.Errorf("got [%s, %s], want [b, a]", got[0].ID, got[1].ID)
+	}
+
+	got, err = s.ListActiveSessionsByNode("node2")
+	if err != nil {
+		t.Fatalf("ListActiveSessionsByNode(node2): %v", err)
+	}
+	if len(got) != 1 || got[0].ID != "c" {
+		t.Errorf("node2 sessions: %v", got)
+	}
+}
+
+func TestStopSessions(t *testing.T) {
+	s := openTestStore(t)
+	now := time.Now().Truncate(time.Second)
+
+	for _, id := range []string{"a", "b", "c"} {
+		if err := s.CreateSession(&Session{ID: id, StartedAt: now}); err != nil {
+			t.Fatalf("CreateSession(%s): %v", id, err)
+		}
+	}
+
+	if err := s.StopSessions([]string{"a", "c"}); err != nil {
+		t.Fatalf("StopSessions: %v", err)
+	}
+
+	for _, tc := range []struct {
+		id      string
+		stopped bool
+	}{
+		{"a", true}, {"b", false}, {"c", true},
+	} {
+		sess, _ := s.GetSession(tc.id)
+		if tc.stopped && sess.StoppedAt.IsZero() {
+			t.Errorf("session %s should be stopped", tc.id)
+		}
+		if !tc.stopped && !sess.StoppedAt.IsZero() {
+			t.Errorf("session %s should not be stopped", tc.id)
+		}
+	}
+
+	// Empty list is a no-op
+	if err := s.StopSessions(nil); err != nil {
+		t.Fatalf("StopSessions(nil): %v", err)
+	}
+}
+
+func TestStopSessionsByPane(t *testing.T) {
+	s := openTestStore(t)
+	now := time.Now().Truncate(time.Second)
+
+	sessions := []struct {
+		id, node, pane string
+	}{
+		{"old1", "node1", "%5"},
+		{"old2", "node1", "%5"},
+		{"keep", "node1", "%5"}, // the new session (excluded)
+		{"other-pane", "node1", "%10"},
+		{"other-node", "node2", "%5"},
+	}
+	for _, tc := range sessions {
+		if err := s.CreateSession(&Session{ID: tc.id, NodeName: tc.node, TmuxPane: tc.pane, StartedAt: now}); err != nil {
+			t.Fatalf("CreateSession(%s): %v", tc.id, err)
+		}
+	}
+
+	stopped, err := s.StopSessionsByPane("node1", "%5", "keep")
+	if err != nil {
+		t.Fatalf("StopSessionsByPane: %v", err)
+	}
+	if len(stopped) != 2 {
+		t.Fatalf("stopped %d sessions, want 2: %v", len(stopped), stopped)
+	}
+
+	// Verify: old1 and old2 stopped, keep/other-pane/other-node still active
+	for _, tc := range []struct {
+		id      string
+		stopped bool
+	}{
+		{"old1", true}, {"old2", true}, {"keep", false}, {"other-pane", false}, {"other-node", false},
+	} {
+		sess, _ := s.GetSession(tc.id)
+		if tc.stopped && sess.StoppedAt.IsZero() {
+			t.Errorf("session %s should be stopped", tc.id)
+		}
+		if !tc.stopped && !sess.StoppedAt.IsZero() {
+			t.Errorf("session %s should not be stopped", tc.id)
+		}
+	}
+
+	// Empty pane is a no-op
+	stopped, err = s.StopSessionsByPane("node1", "", "keep")
+	if err != nil {
+		t.Fatalf("StopSessionsByPane empty pane: %v", err)
+	}
+	if len(stopped) != 0 {
+		t.Errorf("expected no stops for empty pane, got %v", stopped)
+	}
+}
+
 func TestMigrationIdempotent(t *testing.T) {
 	s := openTestStore(t)
 

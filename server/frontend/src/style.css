@@ -264,6 +264,7 @@ a.card:hover { border-color: #5555aa; }
 .dot-active { background: #4ade80; }
 .dot-waiting { background: #fbbf24; }
 .dot-stopped { background: #555577; }
+.dot-offline { background: #6b7d93; }
 .project-name {
   font-size: 15px;
   font-weight: 600;

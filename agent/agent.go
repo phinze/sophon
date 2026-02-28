@@ -28,17 +28,19 @@ type Agent struct {
 	logger *slog.Logger
 
 	// Injectable for testing
-	paneFocused func(pane string) bool
-	sendKeys    func(pane, text string) error
+	paneFocused     func(pane string) bool
+	sendKeys        func(pane, text string) error
+	listClaudePanes func() (map[string]bool, error)
 }
 
 // New creates a new Agent.
 func New(cfg Config, logger *slog.Logger) *Agent {
 	return &Agent{
-		cfg:         cfg,
-		logger:      logger,
-		paneFocused: tmux.PaneFocused,
-		sendKeys:    tmux.SendKeys,
+		cfg:             cfg,
+		logger:          logger,
+		paneFocused:     tmux.PaneFocused,
+		sendKeys:        tmux.SendKeys,
+		listClaudePanes: tmux.ListClaudePanes,
 	}
 }
 
@@ -126,6 +128,13 @@ func (a *Agent) heartbeat() {
 	}
 }
 
+// heartbeatPayload is the JSON body sent during agent registration.
+type heartbeatPayload struct {
+	NodeName   string   `json:"node_name"`
+	URL        string   `json:"url"`
+	AlivePanes []string `json:"alive_panes,omitempty"`
+}
+
 func (a *Agent) register() {
 	if a.cfg.DaemonURL == "" {
 		return
@@ -136,10 +145,26 @@ func (a *Agent) register() {
 		agentURL = fmt.Sprintf("http://127.0.0.1:%d", a.cfg.Port)
 	}
 
-	body, _ := json.Marshal(map[string]string{
-		"node_name": a.cfg.NodeName,
-		"url":       agentURL,
-	})
+	payload := heartbeatPayload{
+		NodeName: a.cfg.NodeName,
+		URL:      agentURL,
+	}
+
+	// Detect claude panes; if detection fails, omit alive_panes (skip reconciliation)
+	if a.listClaudePanes != nil {
+		panes, err := a.listClaudePanes()
+		if err != nil {
+			a.logger.Debug("failed to list claude panes", "error", err)
+		} else {
+			// Always include the field (even empty) to signal "agent checked"
+			payload.AlivePanes = make([]string, 0, len(panes))
+			for paneID := range panes {
+				payload.AlivePanes = append(payload.AlivePanes, paneID)
+			}
+		}
+	}
+
+	body, _ := json.Marshal(payload)
 
 	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Post(a.cfg.DaemonURL+"/api/agents/register", "application/json", bytes.NewReader(body))
@@ -148,5 +173,5 @@ func (a *Agent) register() {
 		return
 	}
 	resp.Body.Close()
-	a.logger.Debug("agent registered", "daemon", a.cfg.DaemonURL)
+	a.logger.Debug("agent registered", "daemon", a.cfg.DaemonURL, "alive_panes", len(payload.AlivePanes))
 }

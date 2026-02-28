@@ -198,6 +198,61 @@ func (s *Store) ReapStoppedSessions(ttl time.Duration) ([]string, error) {
 	return ids, rows.Err()
 }
 
+// ListActiveSessionsByNode returns active sessions for a specific node.
+func (s *Store) ListActiveSessionsByNode(nodeName string) ([]*Session, error) {
+	rows, err := s.db.Query(`SELECT id, tmux_pane, cwd, project, node_name, started_at, stopped_at, last_activity_at,
+		notification_type, notify_title, notify_message, notified_at
+		FROM sessions WHERE stopped_at IS NULL AND node_name = ? ORDER BY started_at DESC`, nodeName)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanSessions(rows)
+}
+
+// StopSessions batch-sets stopped_at = now for the given session IDs.
+func (s *Store) StopSessions(ids []string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	placeholders := make([]string, len(ids))
+	args := make([]any, len(ids)+1)
+	args[0] = formatTime(time.Now())
+	for i, id := range ids {
+		placeholders[i] = "?"
+		args[i+1] = id
+	}
+	query := fmt.Sprintf(`UPDATE sessions SET stopped_at = ? WHERE id IN (%s)`, strings.Join(placeholders, ","))
+	_, err := s.db.Exec(query, args...)
+	return err
+}
+
+// StopSessionsByPane stops active sessions on the same node+pane, excluding excludeID.
+// Returns the IDs of stopped sessions.
+func (s *Store) StopSessionsByPane(nodeName, pane, excludeID string) ([]string, error) {
+	if pane == "" {
+		return nil, nil
+	}
+	now := formatTime(time.Now())
+	rows, err := s.db.Query(`UPDATE sessions SET stopped_at = ?
+		WHERE stopped_at IS NULL AND node_name = ? AND tmux_pane = ? AND id != ?
+		RETURNING id`, now, nodeName, pane, excludeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return ids, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
 // ListActiveSessions returns sessions that haven't been stopped, newest first.
 func (s *Store) ListActiveSessions() ([]*Session, error) {
 	rows, err := s.db.Query(`SELECT id, tmux_pane, cwd, project, node_name, started_at, stopped_at, last_activity_at,

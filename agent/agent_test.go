@@ -142,6 +142,68 @@ func TestTranscriptEndpoint(t *testing.T) {
 	}
 }
 
+func TestHeartbeatIncludesAlivePanes(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	var receivedPayload heartbeatPayload
+	daemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&receivedPayload)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer daemon.Close()
+
+	a := &Agent{
+		cfg: Config{
+			Port:      2588,
+			DaemonURL: daemon.URL,
+			NodeName:  "test-node",
+		},
+		logger: logger,
+		listClaudePanes: func() (map[string]bool, error) {
+			return map[string]bool{"%0": true, "%3": true}, nil
+		},
+	}
+
+	a.register()
+
+	if receivedPayload.NodeName != "test-node" {
+		t.Errorf("NodeName = %q", receivedPayload.NodeName)
+	}
+	if len(receivedPayload.AlivePanes) != 2 {
+		t.Fatalf("AlivePanes len = %d, want 2", len(receivedPayload.AlivePanes))
+	}
+}
+
+func TestHeartbeatOmitsAlivePanesOnError(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	var receivedBody []byte
+	daemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedBody, _ = io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer daemon.Close()
+
+	a := &Agent{
+		cfg: Config{
+			Port:      2588,
+			DaemonURL: daemon.URL,
+			NodeName:  "test-node",
+		},
+		logger: logger,
+		listClaudePanes: func() (map[string]bool, error) {
+			return nil, fmt.Errorf("tmux not running")
+		},
+	}
+
+	a.register()
+
+	// alive_panes should be omitted from JSON when detection fails
+	if strings.Contains(string(receivedBody), "alive_panes") {
+		t.Error("alive_panes should be omitted on error")
+	}
+}
+
 func TestTranscriptEndpointMissingFile(t *testing.T) {
 	a := newTestAgent(t)
 

@@ -6,22 +6,30 @@ const apiBase = "";
 let unsubs: (() => void)[] = [];
 
 function renderActiveCard(s: Session): string {
-  const dotClass = s.notify_message ? "dot-waiting" : "dot-active";
+  const isOffline = s.agent_online === false;
+  const dotClass = isOffline ? "dot-offline" : s.notify_message ? "dot-waiting" : "dot-active";
   let detail = "Started " + timeAgo(s.started_at);
   if (s.last_activity_at) detail += " \u00b7 active " + timeAgo(s.last_activity_at);
-  if (s.notify_message && s.notified_at) detail += " \u00b7 notified " + timeAgo(s.notified_at);
+  if (isOffline) {
+    detail += " \u00b7 agent offline";
+  } else if (s.notify_message && s.notified_at) {
+    detail += " \u00b7 notified " + timeAgo(s.notified_at);
+  }
 
-  let html = '<a class="card" href="/respond/' + escapeHtml(s.session_id) + '">';
+  const tag = isOffline ? "div" : "a";
+  let html = "<" + tag + ' class="card"';
+  if (!isOffline) html += ' href="/respond/' + escapeHtml(s.session_id) + '"';
+  html += ">";
   html += '<div class="card-header">';
   html += '<span class="dot ' + dotClass + '"></span>';
   html += '<span class="project-name">' + escapeHtml(s.project) + "</span>";
   if (s.node_name) html += '<span class="node-name">' + escapeHtml(s.node_name) + "</span>";
   html += "</div>";
   html += '<div class="card-detail">' + escapeHtml(detail) + "</div>";
-  if (s.notify_message) {
+  if (s.notify_message && !isOffline) {
     html += '<div class="card-message">' + escapeHtml(s.notify_message) + "</div>";
   }
-  html += "</a>";
+  html += "</" + tag + ">";
   return html;
 }
 
@@ -45,7 +53,11 @@ function refreshSessions(): void {
       const recentEl = document.getElementById("recent-sessions");
       if (!activeEl || !recentEl) return;
 
-      const active = data.active || [];
+      const active = (data.active || []).sort((a, b) => {
+        const aOnline = a.agent_online !== false ? 0 : 1;
+        const bOnline = b.agent_online !== false ? 0 : 1;
+        return aOnline - bOnline;
+      });
       if (active.length > 0) {
         activeEl.innerHTML = active.map(renderActiveCard).join("");
       } else {
