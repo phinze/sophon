@@ -121,6 +121,20 @@ func (h *testHarness) endSession(t *testing.T, id string) int {
 	return w.Code
 }
 
+func (h *testHarness) toolActivity(t *testing.T, id, hookEventName, toolName string) int {
+	t.Helper()
+	body, _ := json.Marshal(map[string]string{
+		"hook_event_name": hookEventName,
+		"tool_name":       toolName,
+		"node_name":       "test-node",
+	})
+	req := httptest.NewRequest("POST", "/api/sessions/"+id+"/tool-activity", bytes.NewReader(body))
+	req.SetPathValue("id", id)
+	w := httptest.NewRecorder()
+	h.server.handleToolActivity(w, req)
+	return w.Code
+}
+
 func TestNotifyStoresSessionState(t *testing.T) {
 	h := newTestHarness(t)
 	h.createSession(t, "s1", "%5", "/home/user/project")
@@ -551,5 +565,62 @@ func TestAgentRegister(t *testing.T) {
 	}
 	if info.URL != "http://127.0.0.1:2588" {
 		t.Errorf("agent URL = %q", info.URL)
+	}
+}
+
+func TestToolActivityUnknownSessionReturns200(t *testing.T) {
+	h := newTestHarness(t)
+	code := h.toolActivity(t, "nonexistent", "PreToolUse", "Bash")
+	if code != http.StatusOK {
+		t.Fatalf("got %d, want 200", code)
+	}
+}
+
+func TestToolActivityPublishesSSE(t *testing.T) {
+	h := newTestHarness(t)
+	h.createSession(t, "s1", "%5", "/home/user/project")
+
+	// Subscribe after session creation so we don't need to drain session_start
+	ch, unsub := h.server.events.Subscribe("s1")
+	defer unsub()
+
+	code := h.toolActivity(t, "s1", "PreToolUse", "Bash")
+	if code != http.StatusOK {
+		t.Fatalf("got %d, want 200", code)
+	}
+
+	select {
+	case evt := <-ch:
+		if evt.Type != "tool_activity" {
+			t.Errorf("event type = %q, want %q", evt.Type, "tool_activity")
+		}
+		var data map[string]string
+		json.Unmarshal(evt.Data, &data)
+		if data["hook_event_name"] != "PreToolUse" {
+			t.Errorf("hook_event_name = %q, want %q", data["hook_event_name"], "PreToolUse")
+		}
+		if data["tool_name"] != "Bash" {
+			t.Errorf("tool_name = %q, want %q", data["tool_name"], "Bash")
+		}
+	default:
+		t.Error("expected tool_activity event but got none")
+	}
+}
+
+func TestToolActivityDoesNotUpdateLastActivity(t *testing.T) {
+	h := newTestHarness(t)
+	h.createSession(t, "s1", "%5", "/home/user/project")
+
+	// Backdate LastActivityAt
+	sess, _ := h.store.GetSession("s1")
+	old := time.Now().Add(-10 * time.Minute)
+	sess.LastActivityAt = old
+	h.store.UpdateSession(sess)
+
+	h.toolActivity(t, "s1", "PostToolUse", "Read")
+
+	sess, _ = h.store.GetSession("s1")
+	if sess.LastActivityAt.After(old) {
+		t.Errorf("LastActivityAt should not be updated by tool activity, was %v, expected %v", sess.LastActivityAt, old)
 	}
 }

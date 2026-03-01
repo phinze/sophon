@@ -11,6 +11,7 @@ type EventType string
 const (
 	EventNotification  EventType = "notification"
 	EventActivity      EventType = "activity"
+	EventToolActivity  EventType = "tool_activity"
 	EventSessionEnd    EventType = "session_end"
 	EventSessionStart  EventType = "session_start"
 	EventResponse      EventType = "response"

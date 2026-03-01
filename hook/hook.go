@@ -18,6 +18,7 @@ type HookEvent struct {
 	Cwd              string `json:"cwd"`
 	NotificationType string `json:"notification_type"`
 	Message          string `json:"message"`
+	ToolName         string `json:"tool_name"`
 }
 
 // Config holds hook configuration.
@@ -52,8 +53,7 @@ func Run(cfg Config) error {
 	case "SessionEnd":
 		return handleSessionEnd(cfg, event)
 	default:
-		fmt.Fprintf(os.Stderr, "sophon: unhandled hook event %q (session %s)\n", event.HookEventName, event.SessionID)
-		return nil
+		return handleToolActivity(cfg, event)
 	}
 }
 
@@ -117,6 +117,20 @@ func handleSessionEnd(cfg Config, event HookEvent) error {
 		return nil
 	}
 	resp.Body.Close()
+	return nil
+}
+
+func handleToolActivity(cfg Config, event HookEvent) error {
+	body := map[string]interface{}{
+		"hook_event_name": event.HookEventName,
+		"tool_name":       event.ToolName,
+		"node_name":       cfg.NodeName,
+	}
+	err := postJSON(cfg.DaemonURL+"/api/sessions/"+event.SessionID+"/tool-activity", body)
+	if err != nil {
+		// Daemon down, nothing to do for tool activity
+		return nil
+	}
 	return nil
 }
 

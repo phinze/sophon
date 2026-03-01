@@ -4,6 +4,14 @@ export function escapeHtml(s: string): string {
   return d.innerHTML;
 }
 
+export function debounce(fn: () => void, delayMs: number): () => void {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return () => {
+    clearTimeout(timer);
+    timer = setTimeout(fn, delayMs);
+  };
+}
+
 export function timeAgo(iso: string): string {
   if (!iso) return "just now";
   const d = Date.now() - new Date(iso).getTime();

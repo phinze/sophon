@@ -125,6 +125,7 @@ func (s *Server) Run() error {
 	mux.HandleFunc("POST /api/sessions", s.handleCreateSession)
 	mux.HandleFunc("POST /api/sessions/{id}/notify", s.handleNotify)
 	mux.HandleFunc("POST /api/sessions/{id}/activity", s.handleActivity)
+	mux.HandleFunc("POST /api/sessions/{id}/tool-activity", s.handleToolActivity)
 	mux.HandleFunc("DELETE /api/sessions/{id}", s.handleDeleteSession)
 	mux.HandleFunc("POST /api/respond/{id}", s.handleRespond)
 	mux.HandleFunc("GET /api/sessions/{id}/transcript", s.handleTranscript)
@@ -304,6 +305,40 @@ func (s *Server) handleActivity(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
+func (s *Server) handleToolActivity(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+
+	var req struct {
+		HookEventName string `json:"hook_event_name"`
+		ToolName      string `json:"tool_name"`
+		NodeName      string `json:"node_name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+
+	_, err := s.store.GetSession(id)
+	if errors.Is(err, store.ErrNotFound) {
+		w.WriteHeader(http.StatusOK)
+		return
+	} else if err != nil {
+		s.logger.Error("failed to get session", "error", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	// Do NOT update LastActivityAt — avoid frequent store writes; Stop hook handles that.
+	s.events.Publish(id, Event{
+		Type:    EventToolActivity,
+		Session: id,
+		Data:    mustJSON(map[string]string{"hook_event_name": req.HookEventName, "tool_name": req.ToolName}),
+	})
+
+	s.logger.Debug("tool activity", "session_id", id, "event", req.HookEventName, "tool", req.ToolName)
+	w.WriteHeader(http.StatusOK)
+}
+
 func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 
@@ -362,7 +397,10 @@ func (s *Server) handleRespond(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// User responding = new activity; update timestamp so next stop duration is accurate
+	// User responding = new activity; clear notification state and update timestamp
+	sess.NotifyMessage = ""
+	sess.NotificationType = ""
+	sess.NotifiedAt = time.Time{}
 	sess.LastActivityAt = time.Now()
 	if err := s.store.UpdateSession(sess); err != nil {
 		s.logger.Error("failed to update last activity", "error", err)

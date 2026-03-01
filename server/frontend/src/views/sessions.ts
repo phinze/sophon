@@ -1,5 +1,5 @@
 import { Session, SessionsResponse, GlobalEvent } from "../types";
-import { escapeHtml, timeAgo } from "../util";
+import { escapeHtml, timeAgo, debounce } from "../util";
 import { SSEManager } from "../sse";
 
 const apiBase = "";
@@ -87,10 +87,14 @@ export function mount(_params: Record<string, string>, sse: SSEManager): void {
 
   refreshSessions();
 
+  const debouncedRefresh = debounce(refreshSessions, 1000);
+
   unsubs.push(sse.on("notification", () => refreshSessions()));
   unsubs.push(sse.on("session_start", () => refreshSessions()));
   unsubs.push(sse.on("session_end", () => refreshSessions()));
   unsubs.push(sse.on("activity", () => refreshSessions()));
+  unsubs.push(sse.on("response", () => refreshSessions()));
+  unsubs.push(sse.on("tool_activity", () => debouncedRefresh()));
 }
 
 export function unmount(): void {

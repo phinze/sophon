@@ -4,13 +4,15 @@ import {
   GlobalEvent,
   AskQuestionInput,
   TranscriptData,
+  TranscriptMessage,
 } from "../types";
-import { escapeHtml } from "../util";
+import { escapeHtml, debounce } from "../util";
 import { SSEManager } from "../sse";
 
 const apiBase = "";
 let unsubs: (() => void)[] = [];
 let sessionId = "";
+let renderedCount = 0;
 
 function showStatus(msg: string, ok: boolean): void {
   const el = document.getElementById("status");
@@ -27,8 +29,12 @@ function send(text: string): void {
     body: JSON.stringify({ text }),
   })
     .then((r) => {
-      if (r.ok) showStatus("Sent: " + text, true);
-      else r.text().then((t) => showStatus("Error: " + t, false));
+      if (r.ok) {
+        showStatus("Sent: " + text, true);
+        // Clear notification UI since we've responded
+        document.querySelector(".context")?.remove();
+        document.querySelector(".quick-buttons")?.remove();
+      } else r.text().then((t) => showStatus("Error: " + t, false));
     })
     .catch((e) => showStatus("Network error: " + e, false));
 }
@@ -68,6 +74,25 @@ function renderAskQuestion(input: AskQuestionInput): string {
   return html;
 }
 
+function renderMessageContent(msg: TranscriptMessage): string {
+  let content = "";
+  (msg.blocks || []).forEach((b) => {
+    if (b.type === "tool_use" && b.text === "AskUserQuestion" && b.input) {
+      content += renderAskQuestion(b.input);
+    } else if (b.type === "tool_use" && b.text === "Write" && b.input?.content) {
+      content += '<div class="plan-content">' + renderMarkdown(b.input.content) + "</div>";
+    } else if (b.type === "tool_use" && b.text === "ExitPlanMode") {
+      content += '<div class="tool-use plan-approval">Plan ready for approval</div>';
+    } else if (b.type === "tool_use") {
+      const label = b.summary || b.text;
+      content += '<div class="tool-use">' + escapeHtml(label) + "</div>";
+    } else {
+      content += renderMarkdown(b.text);
+    }
+  });
+  return content;
+}
+
 function loadTranscript(): void {
   fetch(apiBase + "/api/sessions/" + sessionId + "/transcript")
     .then((r) => r.json())
@@ -77,27 +102,31 @@ function loadTranscript(): void {
       const messages = data.messages || [];
       if (messages.length === 0) return;
 
-      let html = "";
-      messages.forEach((msg) => {
+      // Compaction or reset: full re-render
+      if (messages.length < renderedCount) {
+        renderedCount = 0;
+        el.innerHTML = "";
+      }
+
+      // Update last assistant message in-place (it accumulates blocks mid-turn)
+      if (renderedCount > 0 && el.lastElementChild) {
+        const lastMsg = messages[renderedCount - 1];
+        if (lastMsg && lastMsg.role === "assistant") {
+          el.lastElementChild.innerHTML = renderMessageContent(lastMsg);
+        }
+      }
+
+      // Append new messages
+      for (let i = renderedCount; i < messages.length; i++) {
+        const msg = messages[i];
         const cls = msg.role === "user" ? "user" : "assistant";
-        let content = "";
-        (msg.blocks || []).forEach((b) => {
-          if (b.type === "tool_use" && b.text === "AskUserQuestion" && b.input) {
-            content += renderAskQuestion(b.input);
-          } else if (b.type === "tool_use" && b.text === "Write" && b.input?.content) {
-            content += '<div class="plan-content">' + renderMarkdown(b.input.content) + "</div>";
-          } else if (b.type === "tool_use" && b.text === "ExitPlanMode") {
-            content += '<div class="tool-use plan-approval">Plan ready for approval</div>';
-          } else if (b.type === "tool_use") {
-            const label = b.summary || b.text;
-            content += '<div class="tool-use">' + escapeHtml(label) + "</div>";
-          } else {
-            content += renderMarkdown(b.text);
-          }
-        });
-        html += '<div class="msg ' + cls + '">' + content + "</div>";
-      });
-      el.innerHTML = html;
+        const div = document.createElement("div");
+        div.className = "msg " + cls;
+        div.innerHTML = renderMessageContent(msg);
+        el.appendChild(div);
+      }
+
+      renderedCount = messages.length;
       el.scrollTop = el.scrollHeight;
     })
     .catch(() => {});
@@ -167,15 +196,17 @@ export function mount(params: Record<string, string>, sse: SSEManager): void {
     });
 
   // Filter global SSE events to this session
+  const debouncedLoad = debounce(loadTranscript, 500);
   const handleEvent = (e: MessageEvent) => {
     const evt: GlobalEvent = JSON.parse(e.data);
     if (evt.session_id !== sessionId) return;
-    loadTranscript();
+    debouncedLoad();
   };
 
   unsubs.push(sse.on("notification", handleEvent));
   unsubs.push(sse.on("activity", handleEvent));
   unsubs.push(sse.on("response", handleEvent));
+  unsubs.push(sse.on("tool_activity", handleEvent));
   unsubs.push(
     sse.on("session_end", (e: MessageEvent) => {
       const evt: GlobalEvent = JSON.parse(e.data);
@@ -189,4 +220,5 @@ export function unmount(): void {
   for (const u of unsubs) u();
   unsubs = [];
   sessionId = "";
+  renderedCount = 0;
 }
