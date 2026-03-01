@@ -68,20 +68,22 @@ func handleSessionStart(cfg Config, event HookEvent, tmuxPane string) error {
 }
 
 func handleNotification(cfg Config, event HookEvent) error {
-	project := projectFromCwd(event.Cwd)
+	repo := repoFromCwd(event.Cwd)
 
-	var title string
+	var title, message string
 	switch event.NotificationType {
 	case "permission_prompt":
-		title = fmt.Sprintf("[%s] Needs approval", project)
+		title = repo + " · Needs approval"
+		message = event.Message // keep actual permission details
 	default:
-		title = fmt.Sprintf("[%s] Waiting for input", project)
+		title = repo + " · Waiting for input"
+		message = "" // suppress generic "Claude is waiting for your input"
 	}
 
 	body := map[string]interface{}{
 		"notification_type": event.NotificationType,
 		"title":             title,
-		"message":           event.Message,
+		"message":           message,
 		"cwd":               event.Cwd,
 		"node_name":         cfg.NodeName,
 	}
@@ -153,13 +155,11 @@ func postJSON(url string, body interface{}) error {
 	return nil
 }
 
-func projectFromCwd(cwd string) string {
+// repoFromCwd returns just the last path component (repo name) for compact display.
+func repoFromCwd(cwd string) string {
 	parts := strings.Split(strings.TrimRight(cwd, "/"), "/")
-	if len(parts) >= 2 {
-		return parts[len(parts)-2] + "/" + parts[len(parts)-1]
-	}
-	if len(parts) == 1 {
-		return parts[0]
+	if len(parts) >= 1 && parts[len(parts)-1] != "" {
+		return parts[len(parts)-1]
 	}
 	return "unknown"
 }
