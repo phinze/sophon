@@ -18,7 +18,8 @@ import (
 type mockNodeOps struct {
 	focused     bool
 	sentKeys    []string
-	transcripts map[string]*transcript.Transcript // keyed by sessionID
+	transcripts map[string]*transcript.Transcript       // keyed by sessionID
+	summaries   map[string]*transcript.SessionSummary    // keyed by sessionID
 }
 
 func (m *mockNodeOps) PaneFocused(nodeName, pane string) bool {
@@ -37,6 +38,15 @@ func (m *mockNodeOps) ReadTranscript(nodeName, sessionID, cwd string) (*transcri
 		}
 	}
 	return &transcript.Transcript{}, nil
+}
+
+func (m *mockNodeOps) ReadSummary(nodeName, sessionID, cwd string) (*transcript.SessionSummary, error) {
+	if m.summaries != nil {
+		if s, ok := m.summaries[sessionID]; ok {
+			return s, nil
+		}
+	}
+	return nil, nil
 }
 
 // testHarness sets up a Server with an in-memory store and a mockNodeOps.
@@ -64,7 +74,10 @@ func newTestHarness(t *testing.T) *testHarness {
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	h.server = New(cfg, st, logger)
-	h.mockOps = mockNodeOps{transcripts: make(map[string]*transcript.Transcript)}
+	h.mockOps = mockNodeOps{
+		transcripts: make(map[string]*transcript.Transcript),
+		summaries:   make(map[string]*transcript.SessionSummary),
+	}
 	h.server.nodeOps = &h.mockOps
 
 	return h
@@ -604,6 +617,53 @@ func TestToolActivityPublishesSSE(t *testing.T) {
 		}
 	default:
 		t.Error("expected tool_activity event but got none")
+	}
+}
+
+func TestActivityUpdatesSummary(t *testing.T) {
+	h := newTestHarness(t)
+	h.createSession(t, "s1", "%5", "/home/user/project")
+
+	// Set up mock summary
+	h.mockOps.summaries["s1"] = &transcript.SessionSummary{
+		Topic:       "Fix the bug",
+		PlanSummary: "Refactor error handling",
+	}
+
+	h.turnEnd(t, "s1")
+
+	// The summary is fetched asynchronously — give the goroutine time to complete
+	time.Sleep(50 * time.Millisecond)
+
+	sess, err := h.store.GetSession("s1")
+	if err != nil {
+		t.Fatalf("GetSession: %v", err)
+	}
+	if sess.Topic != "Fix the bug" {
+		t.Errorf("Topic = %q, want %q", sess.Topic, "Fix the bug")
+	}
+	if sess.PlanSummary != "Refactor error handling" {
+		t.Errorf("PlanSummary = %q, want %q", sess.PlanSummary, "Refactor error handling")
+	}
+}
+
+func TestActivityNoSummaryDoesNotOverwrite(t *testing.T) {
+	h := newTestHarness(t)
+	h.createSession(t, "s1", "%5", "/home/user/project")
+
+	// Pre-set topic on session
+	sess, _ := h.store.GetSession("s1")
+	sess.Topic = "Existing topic"
+	h.store.UpdateSession(sess)
+
+	// No summary configured in mock — ReadSummary returns nil
+
+	h.turnEnd(t, "s1")
+	time.Sleep(50 * time.Millisecond)
+
+	sess, _ = h.store.GetSession("s1")
+	if sess.Topic != "Existing topic" {
+		t.Errorf("Topic = %q, want %q (should not be overwritten)", sess.Topic, "Existing topic")
 	}
 }
 

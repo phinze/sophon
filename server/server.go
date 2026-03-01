@@ -42,6 +42,7 @@ type NodeOps interface {
 	PaneFocused(nodeName, pane string) bool
 	SendKeys(nodeName, pane, text string) error
 	ReadTranscript(nodeName, sessionID, cwd string) (*transcript.Transcript, error)
+	ReadSummary(nodeName, sessionID, cwd string) (*transcript.SessionSummary, error)
 }
 
 // Server is the sophon HTTP server.
@@ -111,6 +112,19 @@ func (o *agentProxyOps) ReadTranscript(nodeName, sessionID, cwd string) (*transc
 		return &transcript.Transcript{}, nil
 	}
 	return tr, nil
+}
+
+func (o *agentProxyOps) ReadSummary(nodeName, sessionID, cwd string) (*transcript.SessionSummary, error) {
+	info, ok := o.agents.Get(nodeName)
+	if !ok || !o.agents.IsHealthy(nodeName) {
+		return nil, nil
+	}
+	summary, err := o.client.GetSummary(info.URL, sessionID, cwd)
+	if err != nil {
+		o.logger.Debug("agent summary error", "node", nodeName, "error", err)
+		return nil, nil
+	}
+	return summary, nil
 }
 
 const stoppedSessionTTL = 24 * time.Hour
@@ -299,6 +313,24 @@ func (s *Server) handleActivity(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.events.Publish(id, Event{Type: EventActivity, Session: id})
+
+	// Asynchronously fetch and store session summary
+	go func() {
+		summary, err := s.nodeOps.ReadSummary(sess.NodeName, id, sess.Cwd)
+		if err != nil || summary == nil {
+			return
+		}
+		// Re-fetch session to avoid overwriting concurrent changes
+		current, err := s.store.GetSession(id)
+		if err != nil {
+			return
+		}
+		current.Topic = summary.Topic
+		current.PlanSummary = summary.PlanSummary
+		if err := s.store.UpdateSession(current); err != nil {
+			s.logger.Debug("failed to update session summary", "error", err)
+		}
+	}()
 
 	s.logger.Info("turn ended", "session_id", id, "elapsed_since_last_activity", elapsed.Round(time.Second))
 

@@ -26,6 +26,11 @@ function renderActiveCard(s: Session): string {
   if (s.node_name) html += '<span class="node-name">' + escapeHtml(s.node_name) + "</span>";
   html += "</div>";
   html += '<div class="card-detail">' + escapeHtml(detail) + "</div>";
+  // Show summary: prefer plan_summary (more specific), then topic
+  const summary = s.plan_summary || s.topic;
+  if (summary && !isOffline) {
+    html += '<div class="card-summary">' + escapeHtml(summary) + "</div>";
+  }
   if (s.notify_message && !isOffline) {
     html += '<div class="card-message">' + escapeHtml(s.notify_message) + "</div>";
   }

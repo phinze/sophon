@@ -574,6 +574,101 @@ func TestTruncate(t *testing.T) {
 	}
 }
 
+// --- ExtractSummary tests ---
+
+func TestExtractSummaryEmpty(t *testing.T) {
+	tr := &Transcript{}
+	s := ExtractSummary(tr)
+	if s.Topic != "" || s.PlanSummary != "" {
+		t.Errorf("expected empty summary, got %+v", s)
+	}
+}
+
+func TestExtractSummaryTopicOnly(t *testing.T) {
+	tr := &Transcript{
+		Messages: []Message{
+			{Role: "user", Blocks: []Block{{Type: "text", Text: "Fix the authentication bug"}}},
+			{Role: "assistant", Blocks: []Block{{Type: "text", Text: "I'll look into it."}}},
+		},
+	}
+	s := ExtractSummary(tr)
+	if s.Topic != "Fix the authentication bug" {
+		t.Errorf("Topic = %q, want %q", s.Topic, "Fix the authentication bug")
+	}
+	if s.PlanSummary != "" {
+		t.Errorf("PlanSummary = %q, want empty", s.PlanSummary)
+	}
+}
+
+func TestExtractSummaryTopicTruncation(t *testing.T) {
+	longText := strings.Repeat("x", 200)
+	tr := &Transcript{
+		Messages: []Message{
+			{Role: "user", Blocks: []Block{{Type: "text", Text: longText}}},
+		},
+	}
+	s := ExtractSummary(tr)
+	if len(s.Topic) > 124 { // 120 + "..."
+		t.Errorf("Topic too long: %d chars", len(s.Topic))
+	}
+	if !strings.HasSuffix(s.Topic, "...") {
+		t.Errorf("expected truncated topic to end with ..., got %q", s.Topic)
+	}
+}
+
+func TestExtractSummaryWithPlan(t *testing.T) {
+	tr := &Transcript{
+		Messages: []Message{
+			{Role: "user", Blocks: []Block{{Type: "text", Text: "Implement feature X"}}},
+			{Role: "assistant", Blocks: []Block{
+				{Type: "text", Text: "Here is the plan."},
+				{Type: "tool_use", Text: "Write", Input: json.RawMessage(`{"file_path":"/tmp/plan.md","content":"# Add Feature X\n\nImplement the new feature with three steps.\n\n## Step 1"}`)},
+				{Type: "tool_use", Text: "ExitPlanMode"},
+			}},
+		},
+	}
+	s := ExtractSummary(tr)
+	if s.Topic != "Implement feature X" {
+		t.Errorf("Topic = %q", s.Topic)
+	}
+	if s.PlanSummary != "Add Feature X" {
+		t.Errorf("PlanSummary = %q, want %q", s.PlanSummary, "Add Feature X")
+	}
+}
+
+func TestExtractSummaryPlanCrossMessage(t *testing.T) {
+	tr := &Transcript{
+		Messages: []Message{
+			{Role: "user", Blocks: []Block{{Type: "text", Text: "Plan the refactor"}}},
+			{Role: "assistant", Blocks: []Block{
+				{Type: "tool_use", Text: "Write", Input: json.RawMessage(`{"file_path":"/tmp/plan.md","content":"## Refactor Database Layer\n\nModernize the data access code."}`)},
+			}},
+			{Role: "assistant", Blocks: []Block{
+				{Type: "tool_use", Text: "ExitPlanMode"},
+			}},
+		},
+	}
+	s := ExtractSummary(tr)
+	if s.PlanSummary != "Refactor Database Layer" {
+		t.Errorf("PlanSummary = %q, want %q", s.PlanSummary, "Refactor Database Layer")
+	}
+}
+
+func TestExtractSummarySkipsToolResultUser(t *testing.T) {
+	// First user message is tool_result only — topic should come from next real user message
+	tr := &Transcript{
+		Messages: []Message{
+			// tool_result-only user messages are filtered by Read(), so they won't appear
+			{Role: "assistant", Blocks: []Block{{Type: "text", Text: "Starting up."}}},
+			{Role: "user", Blocks: []Block{{Type: "text", Text: "Deploy to production"}}},
+		},
+	}
+	s := ExtractSummary(tr)
+	if s.Topic != "Deploy to production" {
+		t.Errorf("Topic = %q, want %q", s.Topic, "Deploy to production")
+	}
+}
+
 func TestToolSummaryArrayContent(t *testing.T) {
 	// tool_result with array content format
 	jsonl := `{"type":"assistant","timestamp":"2026-01-01T00:00:01.000Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ls"}}]}}

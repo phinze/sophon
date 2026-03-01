@@ -287,6 +287,15 @@ a.card:hover { border-color: #5555aa; }
   color: #8888aa;
   margin-left: 16px;
 }
+.card-summary {
+  font-size: 13px;
+  color: #888899;
+  margin-top: 4px;
+  margin-left: 16px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .card-message {
   font-size: 13px;
   color: #aaaacc;

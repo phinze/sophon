@@ -50,6 +50,7 @@ func (a *Agent) Run() error {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/transcript/{session_id}", a.handleTranscript)
+	mux.HandleFunc("GET /api/summary/{session_id}", a.handleSummary)
 	mux.HandleFunc("POST /api/send-keys", a.handleSendKeys)
 	mux.HandleFunc("GET /api/pane-focused", a.handlePaneFocused)
 	mux.HandleFunc("GET /api/health", a.handleHealth)
@@ -72,6 +73,22 @@ func (a *Agent) handleTranscript(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(tr)
+}
+
+func (a *Agent) handleSummary(w http.ResponseWriter, r *http.Request) {
+	sessionID := r.PathValue("session_id")
+	cwd := r.URL.Query().Get("cwd")
+
+	path := transcript.TranscriptPath(a.cfg.ClaudeDir, cwd, sessionID)
+	tr, err := transcript.Read(path)
+	if err != nil {
+		a.logger.Debug("summary transcript read failed", "path", path, "error", err)
+		tr = &transcript.Transcript{}
+	}
+
+	summary := transcript.ExtractSummary(tr)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(summary)
 }
 
 func (a *Agent) handleSendKeys(w http.ResponseWriter, r *http.Request) {

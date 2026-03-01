@@ -77,6 +77,101 @@ func Read(path string) (*Transcript, error) {
 	return &Transcript{Messages: messages}, nil
 }
 
+// SessionSummary holds extracted summary fields for a session.
+type SessionSummary struct {
+	Topic       string `json:"topic"`
+	PlanSummary string `json:"plan_summary"`
+}
+
+// ExtractSummary extracts a topic and plan summary from a transcript.
+// Topic is the first user message's first text block, truncated to 120 chars.
+// PlanSummary is the first non-empty line from the most recent plan's Write content.
+func ExtractSummary(t *Transcript) SessionSummary {
+	var s SessionSummary
+
+	// Topic: first user message text
+	for _, msg := range t.Messages {
+		if msg.Role != "user" {
+			continue
+		}
+		for _, blk := range msg.Blocks {
+			if blk.Type == "text" && blk.Text != "" {
+				s.Topic = truncate(blk.Text, 120)
+				break
+			}
+		}
+		if s.Topic != "" {
+			break
+		}
+	}
+
+	// PlanSummary: scan backwards for last ExitPlanMode, find associated Write
+	for i := len(t.Messages) - 1; i >= 0; i-- {
+		msg := t.Messages[i]
+		if msg.Role != "assistant" {
+			continue
+		}
+		hasExitPlanMode := false
+		for _, blk := range msg.Blocks {
+			if blk.Type == "tool_use" && blk.Text == "ExitPlanMode" {
+				hasExitPlanMode = true
+				break
+			}
+		}
+		if !hasExitPlanMode {
+			continue
+		}
+
+		// Look for Write block in same message
+		if line := extractPlanLine(msg); line != "" {
+			s.PlanSummary = line
+			break
+		}
+		// Look backwards in preceding messages
+		for j := i - 1; j >= 0; j-- {
+			if t.Messages[j].Role != "assistant" {
+				continue
+			}
+			if line := extractPlanLine(t.Messages[j]); line != "" {
+				s.PlanSummary = line
+				break
+			}
+			break // only check the nearest preceding assistant message
+		}
+		break
+	}
+
+	return s
+}
+
+// extractPlanLine finds a Write block with content and returns its first non-empty line.
+func extractPlanLine(msg Message) string {
+	for _, blk := range msg.Blocks {
+		if blk.Type != "tool_use" || blk.Text != "Write" || len(blk.Input) == 0 {
+			continue
+		}
+		var input struct {
+			Content string `json:"content"`
+		}
+		if err := json.Unmarshal(blk.Input, &input); err != nil || input.Content == "" {
+			continue
+		}
+		for _, line := range strings.Split(input.Content, "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			// Strip leading # heading markers
+			line = strings.TrimLeft(line, "# ")
+			line = strings.TrimSpace(line)
+			if line != "" {
+				return truncate(line, 120)
+			}
+		}
+	}
+	return ""
+}
+
 // LastAssistantText returns the last text block from the last assistant message,
 // or "" if none found.
 func LastAssistantText(t *Transcript) string {

@@ -45,6 +45,27 @@ func (c *agentClient) GetTranscript(agentURL, sessionID, cwd string) (*transcrip
 	return &tr, nil
 }
 
+// GetSummary fetches the session summary from an agent.
+func (c *agentClient) GetSummary(agentURL, sessionID, cwd string) (*transcript.SessionSummary, error) {
+	u := fmt.Sprintf("%s/api/summary/%s?cwd=%s", agentURL, sessionID, url.QueryEscape(cwd))
+	client := &http.Client{Timeout: c.actionTimeout}
+	resp, err := client.Get(u)
+	if err != nil {
+		return nil, fmt.Errorf("agent summary request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("agent summary returned %d", resp.StatusCode)
+	}
+
+	var summary transcript.SessionSummary
+	if err := json.NewDecoder(resp.Body).Decode(&summary); err != nil {
+		return nil, fmt.Errorf("decoding agent summary: %w", err)
+	}
+	return &summary, nil
+}
+
 // SendKeys sends a send-keys request to an agent.
 func (c *agentClient) SendKeys(agentURL, pane, text string) error {
 	body, _ := json.Marshal(map[string]string{"pane": pane, "text": text})

@@ -11,6 +11,8 @@ export interface Session {
   tmux_pane?: string;
   cwd?: string;
   agent_online?: boolean;
+  topic?: string;
+  plan_summary?: string;
 }
 
 export interface SessionsResponse {
