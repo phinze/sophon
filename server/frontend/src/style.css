@@ -312,3 +312,24 @@ a.card:hover { border-color: #5555aa; }
   font-style: italic;
   padding: 12px 0;
 }
+
+/* Notification permission pill */
+.notif-pill {
+  display: block;
+  text-align: center;
+  font-size: 13px;
+  padding: 8px 16px;
+  margin-bottom: 12px;
+  border-radius: 20px;
+  background: #2a3a5a;
+  color: #99bbee;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.notif-pill:hover { background: #334a6a; }
+.notif-pill-denied {
+  background: #3a2a2a;
+  color: #cc9999;
+  cursor: default;
+}
+.notif-pill-denied:hover { background: #3a2a2a; }

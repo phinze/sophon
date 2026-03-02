@@ -6,12 +6,38 @@ import * as respondView from "./views/respond";
 
 const sse = new SSEManager("/api/events");
 
-// Web notifications — global, independent of current view
-function requestNotificationPermission(): void {
+// Web notifications — permission pill
+function showNotificationPill(): void {
   if (!("Notification" in window)) return;
+  if (Notification.permission === "granted") return;
+
+  // Remove any existing pill
+  document.getElementById("notif-pill")?.remove();
+
+  const pill = document.createElement("div");
+  pill.id = "notif-pill";
+  pill.className = "notif-pill";
+
   if (Notification.permission === "default") {
-    Notification.requestPermission();
+    pill.textContent = "Enable notifications";
+    pill.addEventListener("click", async () => {
+      const result = await Notification.requestPermission();
+      if (result === "granted") {
+        pill.remove();
+      } else {
+        pill.textContent = "Notifications blocked — check browser settings";
+        pill.classList.add("notif-pill-denied");
+        pill.style.cursor = "default";
+      }
+    });
+  } else {
+    // denied
+    pill.textContent = "Notifications blocked — check browser settings";
+    pill.classList.add("notif-pill-denied");
+    pill.style.cursor = "default";
   }
+
+  document.querySelector(".container")?.prepend(pill);
 }
 
 function showWebNotification(sessionId: string, data: NotificationEventData): void {
@@ -40,6 +66,6 @@ router.add("/", (params) => sessionsView.mount(params, sse), sessionsView.unmoun
 router.add("/respond/:id", (params) => respondView.mount(params, sse), respondView.unmount);
 
 // Boot
-requestNotificationPermission();
+showNotificationPill();
 sse.connect();
 router.start();
