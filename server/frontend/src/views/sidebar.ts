@@ -3,6 +3,7 @@ import { escapeHtml, timeAgo, debounce } from "../util";
 import { SSEManager } from "../sse";
 
 let selectedSessionId = "";
+let recentCollapsed = true;
 
 function renderSidebarCard(s: Session, isActive: boolean): string {
   const isOffline = isActive && s.agent_online === false;
@@ -72,8 +73,13 @@ function refreshSessions(): void {
 
       const recent = data.recent || [];
       if (recent.length > 0) {
-        html += '<div class="sb-section">Recent</div>';
-        html += recent.map((s) => renderSidebarCard(s, false)).join("");
+        const chevron = recentCollapsed ? "\u25b8" : "\u25be";
+        html +=
+          '<div class="sb-section sb-section-toggle" id="sb-recent-toggle">' +
+          chevron + " Recent (" + recent.length + ")</div>";
+        if (!recentCollapsed) {
+          html += recent.map((s) => renderSidebarCard(s, false)).join("");
+        }
       }
 
       if (active.length === 0 && recent.length === 0) {
@@ -106,6 +112,14 @@ export function mount(sse: SSEManager): void {
     "</div>";
 
   refreshSessions();
+
+  // Toggle recent section (delegated since content re-renders)
+  document.getElementById("sb-sessions")!.addEventListener("click", (e) => {
+    if ((e.target as HTMLElement).id === "sb-recent-toggle") {
+      recentCollapsed = !recentCollapsed;
+      refreshSessions();
+    }
+  });
 
   const debouncedRefresh = debounce(refreshSessions, 1000);
   sse.on("notification", () => refreshSessions());

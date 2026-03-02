@@ -47,6 +47,11 @@ body {
   letter-spacing: 0.08em;
   padding: 10px 8px 4px;
 }
+.sb-section-toggle {
+  cursor: pointer;
+  user-select: none;
+}
+.sb-section-toggle:hover { color: #7777aa; }
 .sb-card {
   display: block;
   padding: 8px 10px;
