@@ -351,6 +351,9 @@ a.sb-card:hover { background: #1c2844; }
 .btn-allow { background: #2d6a4f; color: #fff; }
 .btn-allow-all { background: #1b4332; color: #b7e4c7; }
 .btn-deny { background: #6a2d2d; color: #fff; }
+.btn-plan-approve { background: #2d5a8f; color: #d0e4ff; }
+.btn-plan-clear { background: #2a4a6a; color: #a0c4e8; }
+.btn-plan-manual { background: #3a3a5a; color: #b0b0d0; }
 .input-group {
   display: flex;
   gap: 8px;

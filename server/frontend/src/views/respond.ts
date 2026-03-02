@@ -13,6 +13,7 @@ const apiBase = "";
 let unsubs: (() => void)[] = [];
 let sessionId = "";
 let renderedCount = 0;
+let planButtonsShown = false;
 
 function showStatus(msg: string, ok: boolean): void {
   const el = document.getElementById("status");
@@ -93,6 +94,41 @@ function renderMessageContent(msg: TranscriptMessage): string {
   return content;
 }
 
+function hasPlanApproval(messages: TranscriptMessage[]): boolean {
+  // Walk backwards to find last assistant message
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role !== "assistant") continue;
+    return (messages[i].blocks || []).some(
+      (b) => b.type === "tool_use" && b.text === "ExitPlanMode",
+    );
+  }
+  return false;
+}
+
+function showPlanButtons(): void {
+  if (planButtonsShown) return;
+  planButtonsShown = true;
+
+  // Remove permission prompt buttons if present
+  document.querySelector(".quick-buttons")?.remove();
+
+  const inputGroup = document.querySelector(".respond-footer .input-group");
+  if (!inputGroup) return;
+
+  const div = document.createElement("div");
+  div.className = "quick-buttons";
+  div.innerHTML =
+    '<button class="btn-plan-clear" data-send="1">Clear ctx & approve</button>' +
+    '<button class="btn-plan-approve" data-send="2">Approve</button>' +
+    '<button class="btn-plan-manual" data-send="3">Review edits</button>';
+
+  inputGroup.before(div);
+
+  div.querySelectorAll("[data-send]").forEach((btn) => {
+    btn.addEventListener("click", () => send(btn.getAttribute("data-send")!));
+  });
+}
+
 function loadTranscript(): void {
   fetch(apiBase + "/api/sessions/" + sessionId + "/transcript")
     .then((r) => r.json())
@@ -128,6 +164,11 @@ function loadTranscript(): void {
 
       renderedCount = messages.length;
       el.scrollTop = el.scrollHeight;
+
+      // Swap buttons for plan approval if detected
+      if (hasPlanApproval(messages)) {
+        showPlanButtons();
+      }
     })
     .catch(() => {});
 }
@@ -234,4 +275,5 @@ export function unmount(): void {
   unsubs = [];
   sessionId = "";
   renderedCount = 0;
+  planButtonsShown = false;
 }
