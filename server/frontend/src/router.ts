@@ -7,6 +7,7 @@ interface Route {
 
 let routes: Route[] = [];
 let currentUnmount: (() => void) | null = null;
+let navigateCallbacks: ((path: string) => void)[] = [];
 
 export function add(
   path: string,
@@ -25,6 +26,10 @@ export function add(
   routes.push({ pattern, paramNames, mount, unmount });
 }
 
+export function onNavigate(cb: (path: string) => void): void {
+  navigateCallbacks.push(cb);
+}
+
 function resolve(pathname: string): void {
   if (currentUnmount) {
     currentUnmount();
@@ -39,9 +44,10 @@ function resolve(pathname: string): void {
       });
       currentUnmount = route.unmount;
       route.mount(params);
-      return;
+      break;
     }
   }
+  for (const cb of navigateCallbacks) cb(pathname);
 }
 
 export function navigate(path: string): void {

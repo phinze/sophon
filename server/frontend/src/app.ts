@@ -1,6 +1,7 @@
 import { SSEManager } from "./sse";
 import { GlobalEvent, NotificationEventData } from "./types";
 import * as router from "./router";
+import * as sidebar from "./views/sidebar";
 import * as sessionsView from "./views/sessions";
 import * as respondView from "./views/respond";
 
@@ -11,8 +12,8 @@ function showNotificationPill(): void {
   if (!("Notification" in window)) return;
   if (Notification.permission === "granted") return;
 
-  // Remove any existing pill
-  document.getElementById("notif-pill")?.remove();
+  const slot = document.getElementById("notif-pill-slot");
+  if (!slot) return;
 
   const pill = document.createElement("div");
   pill.id = "notif-pill";
@@ -37,7 +38,7 @@ function showNotificationPill(): void {
     pill.style.cursor = "default";
   }
 
-  document.querySelector(".container")?.prepend(pill);
+  slot.appendChild(pill);
 }
 
 function showWebNotification(sessionId: string, data: NotificationEventData): void {
@@ -61,11 +62,18 @@ sse.on("notification", (e: MessageEvent) => {
   showWebNotification(evt.session_id, data);
 });
 
-// Routes
+// Sync sidebar selection with route changes
+router.onNavigate((path) => {
+  const match = path.match(/^\/respond\/(.+)$/);
+  sidebar.setSelected(match ? match[1] : "");
+});
+
+// Routes (main content area only)
 router.add("/", (params) => sessionsView.mount(params, sse), sessionsView.unmount);
 router.add("/respond/:id", (params) => respondView.mount(params, sse), respondView.unmount);
 
 // Boot
+sidebar.mount(sse);
 showNotificationPill();
 sse.connect();
 router.start();

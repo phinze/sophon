@@ -6,7 +6,7 @@ import {
   TranscriptData,
   TranscriptMessage,
 } from "../types";
-import { escapeHtml, debounce } from "../util";
+import { escapeHtml, timeAgo, debounce } from "../util";
 import { SSEManager } from "../sse";
 
 const apiBase = "";
@@ -146,9 +146,21 @@ export function mount(params: Record<string, string>, sse: SSEManager): void {
       const app = document.getElementById("app")!;
       const hasPerm = sess.notification_type === "permission_prompt";
 
-      let html = '<a href="/" class="back-link">&larr; Sessions</a>';
-      html += '<div class="project">' + escapeHtml(sess.project) + "</div>";
+      let html = '<div class="respond-view">';
+
+      // Header
+      html += '<div class="respond-header">';
+      html += '<div class="respond-title">' + escapeHtml(sess.project) + "</div>";
+      let meta = "Started " + timeAgo(sess.started_at);
+      if (sess.node_name) meta += " \u00b7 " + escapeHtml(sess.node_name);
+      html += '<div class="respond-meta">' + meta + "</div>";
+      html += "</div>";
+
+      // Conversation
       html += '<div id="conversation"></div>';
+
+      // Footer
+      html += '<div class="respond-footer">';
 
       if (sess.notify_message) {
         html += '<div class="context">' + escapeHtml(sess.notify_message) + "</div>";
@@ -166,10 +178,11 @@ export function mount(params: Record<string, string>, sse: SSEManager): void {
 
       html += '<div class="input-group">';
       html += '<input type="text" id="text" placeholder="Type a response...">';
-      html += "<button id=\"send-btn\">Send</button>";
+      html += '<button id="send-btn">Send</button>';
       html += "</div>";
 
-      html += '<div class="meta">Session ' + escapeHtml(sessionId) + "</div>";
+      html += "</div>"; // .respond-footer
+      html += "</div>"; // .respond-view
 
       app.innerHTML = html;
 
@@ -192,7 +205,7 @@ export function mount(params: Record<string, string>, sse: SSEManager): void {
     })
     .catch(() => {
       const app = document.getElementById("app")!;
-      app.innerHTML = '<div class="empty">Session not found</div>';
+      app.innerHTML = '<div class="index-empty"><div class="index-empty-hint">Session not found</div></div>';
     });
 
   // Filter global SSE events to this session
