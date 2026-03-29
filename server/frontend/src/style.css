@@ -399,6 +399,7 @@ a.sb-card:hover { background: #1c2844; }
   flex-shrink: 0;
 }
 .dot-active { background: #4ade80; }
+.dot-idle { background: #4ade80; opacity: 0.4; }
 .dot-waiting { background: #fbbf24; }
 .dot-stopped { background: #555577; }
 .dot-offline { background: #6b7d93; }

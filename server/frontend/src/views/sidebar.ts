@@ -4,6 +4,14 @@ import { SSEManager } from "../sse";
 
 let selectedSessionId = "";
 let recentCollapsed = true;
+const lastToolActivity: Map<string, number> = new Map();
+const WORKING_THRESHOLD_MS = 60_000;
+
+function isWorking(sessionId: string): boolean {
+  const last = lastToolActivity.get(sessionId);
+  if (!last) return false;
+  return Date.now() - last < WORKING_THRESHOLD_MS;
+}
 
 function renderSidebarCard(s: Session, isActive: boolean): string {
   const isOffline = isActive && s.agent_online === false;
@@ -14,7 +22,9 @@ function renderSidebarCard(s: Session, isActive: boolean): string {
       ? "dot-offline"
       : hasNotification
         ? "dot-waiting"
-        : "dot-active";
+        : isWorking(s.session_id)
+          ? "dot-active"
+          : "dot-idle";
   const selected = s.session_id === selectedSessionId ? " selected" : "";
   const clickable = isActive && !isOffline;
 
@@ -60,10 +70,10 @@ function refreshSessions(): void {
 
       let html = "";
       const active = (data.active || []).sort((a, b) => {
-        // Notifications first, then online, then offline
-        const aWeight = a.notify_message ? 0 : a.agent_online !== false ? 1 : 2;
-        const bWeight = b.notify_message ? 0 : b.agent_online !== false ? 1 : 2;
-        return aWeight - bWeight;
+        // Most recent activity first
+        const aTime = a.last_activity_at || a.started_at || "";
+        const bTime = b.last_activity_at || b.started_at || "";
+        return bTime.localeCompare(aTime);
       });
 
       if (active.length > 0) {
@@ -127,5 +137,17 @@ export function mount(sse: SSEManager): void {
   sse.on("session_end", () => refreshSessions());
   sse.on("activity", () => refreshSessions());
   sse.on("response", () => refreshSessions());
-  sse.on("tool_activity", () => debouncedRefresh());
+  let idleTimer: ReturnType<typeof setTimeout> | null = null;
+  sse.on("tool_activity", (e: MessageEvent) => {
+    try {
+      const data = JSON.parse(e.data) as GlobalEvent;
+      if (data.session_id) {
+        lastToolActivity.set(data.session_id, Date.now());
+      }
+    } catch { /* ignore parse errors */ }
+    debouncedRefresh();
+    // Schedule a refresh after the working threshold to transition dot to idle
+    if (idleTimer) clearTimeout(idleTimer);
+    idleTimer = setTimeout(refreshSessions, WORKING_THRESHOLD_MS + 1000);
+  });
 }
