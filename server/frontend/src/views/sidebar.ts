@@ -20,15 +20,15 @@ function isWorking(sessionId: string): boolean {
 
 function renderSidebarCard(s: Session, isActive: boolean): string {
   const isOffline = isActive && s.agent_online === false;
-  const hasNotification = isActive && !isOffline && !!s.notify_message;
+  const hasNotification = isActive && !isOffline && !!s.notification_type;
   const dotClass = !isActive
     ? "dot-stopped"
     : isOffline
       ? "dot-offline"
-      : hasNotification
-        ? "dot-waiting"
-        : isWorking(s.session_id)
-          ? "dot-active"
+      : isWorking(s.session_id)
+        ? "dot-active"
+        : hasNotification
+          ? "dot-waiting"
           : "dot-idle";
   const selected = s.session_id === selectedSessionId ? " selected" : "";
   const clickable = isActive && !isOffline;
