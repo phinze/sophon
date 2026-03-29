@@ -486,9 +486,10 @@ func (s *Server) reapSessions() {
 
 func (s *Server) handleAgentRegister(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		NodeName   string   `json:"node_name"`
-		URL        string   `json:"url"`
-		AlivePanes *[]string `json:"alive_panes,omitempty"` // nil = agent couldn't check
+		NodeName   string            `json:"node_name"`
+		URL        string            `json:"url"`
+		AlivePanes *[]string         `json:"alive_panes,omitempty"` // nil = agent couldn't check
+		PaneTitles map[string]string `json:"pane_titles,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
@@ -500,6 +501,13 @@ func (s *Server) handleAgentRegister(w http.ResponseWriter, r *http.Request) {
 	// Reconcile sessions if agent reported alive panes
 	if req.AlivePanes != nil {
 		s.reconcileSessions(req.NodeName, *req.AlivePanes)
+	}
+
+	// Update pane titles for active sessions
+	if len(req.PaneTitles) > 0 {
+		if err := s.store.UpdatePaneTitles(req.NodeName, req.PaneTitles); err != nil {
+			s.logger.Error("failed to update pane titles", "error", err, "node", req.NodeName)
+		}
 	}
 
 	s.logger.Debug("agent registered", "node", req.NodeName, "url", req.URL)

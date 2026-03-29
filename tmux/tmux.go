@@ -136,6 +136,31 @@ func findClaudePanes(tmuxOutput, psOutput string) map[string]bool {
 	return result
 }
 
+// ListPaneTitles returns a map of pane ID to pane title for all tmux panes.
+func ListPaneTitles() (map[string]string, error) {
+	out, err := exec.Command("tmux", "list-panes", "-a", "-F", "#{pane_id}\t#{pane_title}").Output()
+	if err != nil {
+		return nil, fmt.Errorf("tmux list-panes: %w", err)
+	}
+	return parsePaneTitles(string(out)), nil
+}
+
+// parsePaneTitles parses tab-separated "pane_id\ttitle" lines.
+func parsePaneTitles(output string) map[string]string {
+	titles := make(map[string]string)
+	for _, line := range strings.Split(output, "\n") {
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, "\t", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		titles[parts[0]] = parts[1]
+	}
+	return titles
+}
+
 // SendKeys sends text to a tmux pane followed by Enter.
 func SendKeys(pane, text string) error {
 	if pane == "" {

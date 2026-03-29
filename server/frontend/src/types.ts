@@ -13,6 +13,7 @@ export interface Session {
   agent_online?: boolean;
   topic?: string;
   plan_summary?: string;
+  pane_title?: string;
 }
 
 export interface SessionsResponse {

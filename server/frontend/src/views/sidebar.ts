@@ -4,6 +4,11 @@ import { SSEManager } from "../sse";
 
 let selectedSessionId = "";
 let recentCollapsed = true;
+
+// Strip braille spinner characters (⠐⠂⠄⠈⠑⠒⠔⠘⠡⠢⠤⠨⠰ etc.) and ✳ prefix from Claude pane titles
+function stripSpinnerPrefix(title: string): string {
+  return title.replace(/^[\u2800-\u28FF✳]\s*/, "").trim();
+}
 const lastToolActivity: Map<string, number> = new Map();
 const WORKING_THRESHOLD_MS = 60_000;
 
@@ -38,6 +43,12 @@ function renderSidebarCard(s: Session, isActive: boolean): string {
   html += '<span class="sb-project">' + escapeHtml(s.project) + "</span>";
   if (s.node_name) html += '<span class="sb-node">' + escapeHtml(s.node_name) + "</span>";
   html += "</div>";
+
+  // Show pane title (task description set by Claude Code)
+  const paneTitle = stripSpinnerPrefix(s.pane_title || "");
+  if (paneTitle && paneTitle !== "Claude Code") {
+    html += '<div class="sb-pane-title">' + escapeHtml(paneTitle) + "</div>";
+  }
 
   // Detail line: summary or notification for active, timestamp for recent
   if (isActive && !isOffline) {

@@ -108,3 +108,24 @@ func TestFindClaudePanesNoPanes(t *testing.T) {
 		t.Errorf("expected empty, got %v", result)
 	}
 }
+
+func TestParsePaneTitles(t *testing.T) {
+	input := "%0\t✳ Migrate blog to Miren\n%1\tfish\n%5\t⠐ Display pane titles in Sophon\n"
+	titles := parsePaneTitles(input)
+	if len(titles) != 3 {
+		t.Fatalf("got %d titles, want 3", len(titles))
+	}
+	if titles["%0"] != "✳ Migrate blog to Miren" {
+		t.Errorf("%%0 title = %q", titles["%0"])
+	}
+	if titles["%5"] != "⠐ Display pane titles in Sophon" {
+		t.Errorf("%%5 title = %q", titles["%5"])
+	}
+}
+
+func TestParsePaneTitlesEmpty(t *testing.T) {
+	titles := parsePaneTitles("")
+	if len(titles) != 0 {
+		t.Errorf("expected empty, got %v", titles)
+	}
+}

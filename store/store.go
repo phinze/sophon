@@ -10,7 +10,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const currentSchemaVersion = 4
+const currentSchemaVersion = 5
 
 // ErrNotFound is returned when a session is not found.
 var ErrNotFound = errors.New("session not found")
@@ -35,6 +35,9 @@ type Session struct {
 	// Session summary (extracted from transcript)
 	Topic       string `json:"topic,omitempty"`
 	PlanSummary string `json:"plan_summary,omitempty"`
+
+	// Pane title set by Claude Code (e.g. "Migrate blog to Miren")
+	PaneTitle string `json:"pane_title,omitempty"`
 }
 
 // Store provides SQLite-backed session persistence.
@@ -132,6 +135,15 @@ func (s *Store) migrate() error {
 		version = 4
 	}
 
+	if version < 5 {
+		if _, err := s.db.Exec(`ALTER TABLE sessions ADD COLUMN pane_title TEXT NOT NULL DEFAULT ''`); err != nil {
+			if !strings.Contains(err.Error(), "duplicate column") {
+				return err
+			}
+		}
+		version = 5
+	}
+
 	// Upsert the version
 	if _, err := s.db.Exec(`DELETE FROM schema_version`); err != nil {
 		return err
@@ -145,14 +157,14 @@ func (s *Store) migrate() error {
 // CreateSession inserts or replaces a session.
 func (s *Store) CreateSession(sess *Session) error {
 	_, err := s.db.Exec(`INSERT OR REPLACE INTO sessions
-		(id, tmux_pane, cwd, project, node_name, started_at, stopped_at, last_activity_at, notification_type, notify_title, notify_message, notified_at, topic, plan_summary)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		(id, tmux_pane, cwd, project, node_name, started_at, stopped_at, last_activity_at, notification_type, notify_title, notify_message, notified_at, topic, plan_summary, pane_title)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		sess.ID, sess.TmuxPane, sess.Cwd, sess.Project, sess.NodeName,
 		formatTime(sess.StartedAt), formatNullableTime(sess.StoppedAt),
 		formatNullableTime(sess.LastActivityAt),
 		sess.NotificationType, sess.NotifyTitle, sess.NotifyMessage,
 		formatNullableTime(sess.NotifiedAt),
-		sess.Topic, sess.PlanSummary,
+		sess.Topic, sess.PlanSummary, sess.PaneTitle,
 	)
 	return err
 }
@@ -160,7 +172,7 @@ func (s *Store) CreateSession(sess *Session) error {
 // GetSession retrieves a session by ID. Returns ErrNotFound if not found.
 func (s *Store) GetSession(id string) (*Session, error) {
 	row := s.db.QueryRow(`SELECT id, tmux_pane, cwd, project, node_name, started_at, stopped_at, last_activity_at,
-		notification_type, notify_title, notify_message, notified_at, topic, plan_summary
+		notification_type, notify_title, notify_message, notified_at, topic, plan_summary, pane_title
 		FROM sessions WHERE id = ?`, id)
 	sess, err := scanSession(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -174,14 +186,14 @@ func (s *Store) UpdateSession(sess *Session) error {
 	result, err := s.db.Exec(`UPDATE sessions SET
 		tmux_pane = ?, cwd = ?, project = ?, node_name = ?, started_at = ?, stopped_at = ?, last_activity_at = ?,
 		notification_type = ?, notify_title = ?, notify_message = ?, notified_at = ?,
-		topic = ?, plan_summary = ?
+		topic = ?, plan_summary = ?, pane_title = ?
 		WHERE id = ?`,
 		sess.TmuxPane, sess.Cwd, sess.Project, sess.NodeName,
 		formatTime(sess.StartedAt), formatNullableTime(sess.StoppedAt),
 		formatNullableTime(sess.LastActivityAt),
 		sess.NotificationType, sess.NotifyTitle, sess.NotifyMessage,
 		formatNullableTime(sess.NotifiedAt),
-		sess.Topic, sess.PlanSummary,
+		sess.Topic, sess.PlanSummary, sess.PaneTitle,
 		sess.ID,
 	)
 	if err != nil {
@@ -193,6 +205,18 @@ func (s *Store) UpdateSession(sess *Session) error {
 	}
 	if n == 0 {
 		return ErrNotFound
+	}
+	return nil
+}
+
+// UpdatePaneTitles updates pane_title for active sessions matching the given pane IDs on a node.
+func (s *Store) UpdatePaneTitles(nodeName string, paneTitles map[string]string) error {
+	for paneID, title := range paneTitles {
+		_, err := s.db.Exec(`UPDATE sessions SET pane_title = ? WHERE stopped_at IS NULL AND node_name = ? AND tmux_pane = ?`,
+			title, nodeName, paneID)
+		if err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -222,7 +246,7 @@ func (s *Store) ReapStoppedSessions(ttl time.Duration) ([]string, error) {
 // ListActiveSessionsByNode returns active sessions for a specific node.
 func (s *Store) ListActiveSessionsByNode(nodeName string) ([]*Session, error) {
 	rows, err := s.db.Query(`SELECT id, tmux_pane, cwd, project, node_name, started_at, stopped_at, last_activity_at,
-		notification_type, notify_title, notify_message, notified_at, topic, plan_summary
+		notification_type, notify_title, notify_message, notified_at, topic, plan_summary, pane_title
 		FROM sessions WHERE stopped_at IS NULL AND node_name = ? ORDER BY started_at DESC`, nodeName)
 	if err != nil {
 		return nil, err
@@ -277,7 +301,7 @@ func (s *Store) StopSessionsByPane(nodeName, pane, excludeID string) ([]string, 
 // ListActiveSessions returns sessions that haven't been stopped, newest first.
 func (s *Store) ListActiveSessions() ([]*Session, error) {
 	rows, err := s.db.Query(`SELECT id, tmux_pane, cwd, project, node_name, started_at, stopped_at, last_activity_at,
-		notification_type, notify_title, notify_message, notified_at, topic, plan_summary
+		notification_type, notify_title, notify_message, notified_at, topic, plan_summary, pane_title
 		FROM sessions WHERE stopped_at IS NULL ORDER BY started_at DESC`)
 	if err != nil {
 		return nil, err
@@ -289,7 +313,7 @@ func (s *Store) ListActiveSessions() ([]*Session, error) {
 // ListRecentSessions returns stopped sessions ordered by stopped_at DESC, limited to n.
 func (s *Store) ListRecentSessions(limit int) ([]*Session, error) {
 	rows, err := s.db.Query(`SELECT id, tmux_pane, cwd, project, node_name, started_at, stopped_at, last_activity_at,
-		notification_type, notify_title, notify_message, notified_at, topic, plan_summary
+		notification_type, notify_title, notify_message, notified_at, topic, plan_summary, pane_title
 		FROM sessions WHERE stopped_at IS NOT NULL ORDER BY stopped_at DESC LIMIT ?`, limit)
 	if err != nil {
 		return nil, err
@@ -329,7 +353,7 @@ func scanSession(s scanner) (*Session, error) {
 		&startedAt, &stoppedAt, &lastActivityAt,
 		&sess.NotificationType, &sess.NotifyTitle, &sess.NotifyMessage,
 		&notifiedAt,
-		&sess.Topic, &sess.PlanSummary,
+		&sess.Topic, &sess.PlanSummary, &sess.PaneTitle,
 	)
 	if err != nil {
 		return nil, err

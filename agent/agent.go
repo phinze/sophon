@@ -31,6 +31,7 @@ type Agent struct {
 	paneFocused     func(pane string) bool
 	sendKeys        func(pane, text string) error
 	listClaudePanes func() (map[string]bool, error)
+	listPaneTitles  func() (map[string]string, error)
 }
 
 // New creates a new Agent.
@@ -41,6 +42,7 @@ func New(cfg Config, logger *slog.Logger) *Agent {
 		paneFocused:     tmux.PaneFocused,
 		sendKeys:        tmux.SendKeys,
 		listClaudePanes: tmux.ListClaudePanes,
+		listPaneTitles:  tmux.ListPaneTitles,
 	}
 }
 
@@ -147,9 +149,10 @@ func (a *Agent) heartbeat() {
 
 // heartbeatPayload is the JSON body sent during agent registration.
 type heartbeatPayload struct {
-	NodeName   string   `json:"node_name"`
-	URL        string   `json:"url"`
-	AlivePanes []string `json:"alive_panes,omitempty"`
+	NodeName   string            `json:"node_name"`
+	URL        string            `json:"url"`
+	AlivePanes []string          `json:"alive_panes,omitempty"`
+	PaneTitles map[string]string `json:"pane_titles,omitempty"`
 }
 
 func (a *Agent) register() {
@@ -177,6 +180,21 @@ func (a *Agent) register() {
 			payload.AlivePanes = make([]string, 0, len(panes))
 			for paneID := range panes {
 				payload.AlivePanes = append(payload.AlivePanes, paneID)
+			}
+
+			// Get pane titles for alive claude panes
+			if a.listPaneTitles != nil && len(panes) > 0 {
+				allTitles, err := a.listPaneTitles()
+				if err != nil {
+					a.logger.Debug("failed to list pane titles", "error", err)
+				} else {
+					payload.PaneTitles = make(map[string]string, len(panes))
+					for paneID := range panes {
+						if title, ok := allTitles[paneID]; ok {
+							payload.PaneTitles[paneID] = title
+						}
+					}
+				}
 			}
 		}
 	}

@@ -86,6 +86,15 @@ a.sb-card:hover { background: #1c2844; }
   margin-left: auto;
   flex-shrink: 0;
 }
+.sb-pane-title {
+  font-size: 12px;
+  color: #8899bb;
+  margin-top: 2px;
+  margin-left: 16px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .sb-detail {
   font-size: 12px;
   color: #666688;
