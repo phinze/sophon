@@ -234,8 +234,10 @@ func TestReadRegularToolUseOmitsInput(t *testing.T) {
 	}
 }
 
-func TestReadExitPlanModePreservesWriteInput(t *testing.T) {
-	jsonl := `{"type":"assistant","timestamp":"2026-01-01T00:00:01.000Z","message":{"role":"assistant","content":[{"type":"text","text":"Here is the plan."},{"type":"tool_use","id":"t1","name":"Write","input":{"file_path":"/tmp/plan.md","content":"## Plan\n\nDo the thing."}},{"type":"tool_use","id":"t2","name":"ExitPlanMode","input":{}}]}}` + "\n"
+func TestReadExitPlanModePreservesPlanInput(t *testing.T) {
+	// The plan markdown lives in ExitPlanMode's own input ("plan" key). The
+	// sibling Write block (the plan file) is incidental and its input is dropped.
+	jsonl := `{"type":"assistant","timestamp":"2026-01-01T00:00:01.000Z","message":{"role":"assistant","content":[{"type":"text","text":"Here is the plan."},{"type":"tool_use","id":"t1","name":"Write","input":{"file_path":"/tmp/plan.md","content":"## Plan\n\nDo the thing."}},{"type":"tool_use","id":"t2","name":"ExitPlanMode","input":{"plan":"## Plan\n\nDo the thing."}}]}}` + "\n"
 
 	tr := readFromString(t, jsonl)
 	if len(tr.Messages) != 1 {
@@ -246,64 +248,49 @@ func TestReadExitPlanModePreservesWriteInput(t *testing.T) {
 		t.Fatalf("got %d blocks, want 3", len(m.Blocks))
 	}
 
-	// Write input should be preserved because ExitPlanMode is present
+	// Write input should NOT be preserved anymore.
 	writeBlock := m.Blocks[1]
 	if writeBlock.Text != "Write" {
 		t.Errorf("block 1 text = %q, want Write", writeBlock.Text)
 	}
-	if writeBlock.Input == nil {
-		t.Fatal("Write input should be preserved when ExitPlanMode is present")
-	}
-	var writeInput map[string]interface{}
-	if err := json.Unmarshal(writeBlock.Input, &writeInput); err != nil {
-		t.Fatalf("failed to parse Write input: %v", err)
-	}
-	if writeInput["content"] != "## Plan\n\nDo the thing." {
-		t.Errorf("Write content = %v", writeInput["content"])
+	if writeBlock.Input != nil {
+		t.Error("Write input should not be preserved")
 	}
 
-	// ExitPlanMode block should be present
-	if m.Blocks[2].Text != "ExitPlanMode" {
-		t.Errorf("block 2 text = %q, want ExitPlanMode", m.Blocks[2].Text)
+	// ExitPlanMode block carries the plan in its input.
+	planBlock := m.Blocks[2]
+	if planBlock.Text != "ExitPlanMode" {
+		t.Errorf("block 2 text = %q, want ExitPlanMode", planBlock.Text)
+	}
+	if planBlock.Input == nil {
+		t.Fatal("ExitPlanMode input should be preserved")
+	}
+	var planInput map[string]interface{}
+	if err := json.Unmarshal(planBlock.Input, &planInput); err != nil {
+		t.Fatalf("failed to parse ExitPlanMode input: %v", err)
+	}
+	if planInput["plan"] != "## Plan\n\nDo the thing." {
+		t.Errorf("plan = %v", planInput["plan"])
 	}
 }
 
-func TestReadExitPlanModePreservesWriteInputCrossMessage(t *testing.T) {
-	// Write tool and ExitPlanMode in different assistant messages (common case:
-	// Claude writes the plan file, gets the result, then calls ExitPlanMode).
-	lines := `{"type":"assistant","timestamp":"2026-01-01T00:00:01.000Z","message":{"role":"assistant","content":[{"type":"text","text":"Here is the plan."},{"type":"tool_use","id":"t1","name":"Write","input":{"file_path":"/tmp/plan.md","content":"## Plan\n\nStep 1: Do the thing."}}]}}
-{"type":"user","timestamp":"2026-01-01T00:00:02.000Z","isMeta":true,"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}}
-{"type":"assistant","timestamp":"2026-01-01T00:00:03.000Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"t2","name":"ExitPlanMode","input":{}}]}}
-`
-	tr := readFromString(t, lines)
-	// Expected: 2 assistant messages (tool_result user is filtered)
-	if len(tr.Messages) != 2 {
-		t.Fatalf("got %d messages, want 2", len(tr.Messages))
+func TestReadExitPlanModeEmptyInputIsGraceful(t *testing.T) {
+	// ExitPlanMode with no plan field parses fine and simply carries no plan.
+	jsonl := `{"type":"assistant","timestamp":"2026-01-01T00:00:03.000Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"t2","name":"ExitPlanMode","input":{}}]}}` + "\n"
+	tr := readFromString(t, jsonl)
+	if len(tr.Messages) != 1 {
+		t.Fatalf("got %d messages, want 1", len(tr.Messages))
 	}
-
-	// Write input should be preserved even though ExitPlanMode is in a different message
-	writeBlock := tr.Messages[0].Blocks[1]
-	if writeBlock.Text != "Write" {
-		t.Errorf("block 1 text = %q, want Write", writeBlock.Text)
+	blk := tr.Messages[0].Blocks[0]
+	if blk.Text != "ExitPlanMode" {
+		t.Errorf("block text = %q, want ExitPlanMode", blk.Text)
 	}
-	if writeBlock.Input == nil {
-		t.Fatal("Write input should be preserved when ExitPlanMode is in a subsequent message")
-	}
-	var writeInput map[string]interface{}
-	if err := json.Unmarshal(writeBlock.Input, &writeInput); err != nil {
-		t.Fatalf("failed to parse Write input: %v", err)
-	}
-	if writeInput["content"] != "## Plan\n\nStep 1: Do the thing." {
-		t.Errorf("Write content = %v", writeInput["content"])
-	}
-
-	// ExitPlanMode block should be present in second message
-	if tr.Messages[1].Blocks[0].Text != "ExitPlanMode" {
-		t.Errorf("msg 1 block 0 text = %q, want ExitPlanMode", tr.Messages[1].Blocks[0].Text)
+	if planFirstLine(blk.Input) != "" {
+		t.Error("empty ExitPlanMode input should yield no plan line")
 	}
 }
 
-func TestReadWriteWithoutExitPlanModeOmitsInput(t *testing.T) {
+func TestReadWriteInputAlwaysOmitted(t *testing.T) {
 	jsonl := `{"type":"assistant","timestamp":"2026-01-01T00:00:01.000Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Write","input":{"file_path":"/tmp/foo.go","content":"package main"}}]}}` + "\n"
 
 	tr := readFromString(t, jsonl)
@@ -311,7 +298,7 @@ func TestReadWriteWithoutExitPlanModeOmitsInput(t *testing.T) {
 		t.Fatalf("got %d messages, want 1", len(tr.Messages))
 	}
 	if tr.Messages[0].Blocks[0].Input != nil {
-		t.Error("Write input should not be preserved without ExitPlanMode")
+		t.Error("Write input should never be preserved for display")
 	}
 }
 
@@ -622,8 +609,7 @@ func TestExtractSummaryWithPlan(t *testing.T) {
 			{Role: "user", Blocks: []Block{{Type: "text", Text: "Implement feature X"}}},
 			{Role: "assistant", Blocks: []Block{
 				{Type: "text", Text: "Here is the plan."},
-				{Type: "tool_use", Text: "Write", Input: json.RawMessage(`{"file_path":"/tmp/plan.md","content":"# Add Feature X\n\nImplement the new feature with three steps.\n\n## Step 1"}`)},
-				{Type: "tool_use", Text: "ExitPlanMode"},
+				{Type: "tool_use", Text: "ExitPlanMode", Input: json.RawMessage(`{"plan":"# Add Feature X\n\nImplement the new feature with three steps.\n\n## Step 1"}`)},
 			}},
 		},
 	}
@@ -636,15 +622,17 @@ func TestExtractSummaryWithPlan(t *testing.T) {
 	}
 }
 
-func TestExtractSummaryPlanCrossMessage(t *testing.T) {
+func TestExtractSummaryPlanFromLatestExitPlanMode(t *testing.T) {
+	// The most recent ExitPlanMode wins, even when earlier assistant turns ran
+	// other tools.
 	tr := &Transcript{
 		Messages: []Message{
 			{Role: "user", Blocks: []Block{{Type: "text", Text: "Plan the refactor"}}},
 			{Role: "assistant", Blocks: []Block{
-				{Type: "tool_use", Text: "Write", Input: json.RawMessage(`{"file_path":"/tmp/plan.md","content":"## Refactor Database Layer\n\nModernize the data access code."}`)},
+				{Type: "tool_use", Text: "Read", Summary: "Read foo.go"},
 			}},
 			{Role: "assistant", Blocks: []Block{
-				{Type: "tool_use", Text: "ExitPlanMode"},
+				{Type: "tool_use", Text: "ExitPlanMode", Input: json.RawMessage(`{"plan":"## Refactor Database Layer\n\nModernize the data access code."}`)},
 			}},
 		},
 	}

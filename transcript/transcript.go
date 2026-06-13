@@ -72,7 +72,6 @@ func Read(path string) (*Transcript, error) {
 		return nil, err
 	}
 
-	preservePlanWriteInputs(messages)
 	attachSummaries(messages, toolResults)
 	return &Transcript{Messages: messages}, nil
 }
@@ -105,68 +104,48 @@ func ExtractSummary(t *Transcript) SessionSummary {
 		}
 	}
 
-	// PlanSummary: scan backwards for last ExitPlanMode, find associated Write
-	for i := len(t.Messages) - 1; i >= 0; i-- {
+	// PlanSummary: most recent ExitPlanMode block's plan, first non-empty line.
+	for i := len(t.Messages) - 1; i >= 0 && s.PlanSummary == ""; i-- {
 		msg := t.Messages[i]
 		if msg.Role != "assistant" {
 			continue
 		}
-		hasExitPlanMode := false
 		for _, blk := range msg.Blocks {
-			if blk.Type == "tool_use" && blk.Text == "ExitPlanMode" {
-				hasExitPlanMode = true
-				break
-			}
-		}
-		if !hasExitPlanMode {
-			continue
-		}
-
-		// Look for Write block in same message
-		if line := extractPlanLine(msg); line != "" {
-			s.PlanSummary = line
-			break
-		}
-		// Look backwards in preceding messages
-		for j := i - 1; j >= 0; j-- {
-			if t.Messages[j].Role != "assistant" {
+			if blk.Type != "tool_use" || blk.Text != "ExitPlanMode" {
 				continue
 			}
-			if line := extractPlanLine(t.Messages[j]); line != "" {
+			if line := planFirstLine(blk.Input); line != "" {
 				s.PlanSummary = line
 				break
 			}
-			break // only check the nearest preceding assistant message
 		}
-		break
 	}
 
 	return s
 }
 
-// extractPlanLine finds a Write block with content and returns its first non-empty line.
-func extractPlanLine(msg Message) string {
-	for _, blk := range msg.Blocks {
-		if blk.Type != "tool_use" || blk.Text != "Write" || len(blk.Input) == 0 {
+// planFirstLine reads an ExitPlanMode tool input ("plan" key) and returns its
+// first non-empty line, stripped of leading heading markers.
+func planFirstLine(input json.RawMessage) string {
+	if len(input) == 0 {
+		return ""
+	}
+	var parsed struct {
+		Plan string `json:"plan"`
+	}
+	if err := json.Unmarshal(input, &parsed); err != nil || parsed.Plan == "" {
+		return ""
+	}
+	for _, line := range strings.Split(parsed.Plan, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
 			continue
 		}
-		var input struct {
-			Content string `json:"content"`
-		}
-		if err := json.Unmarshal(blk.Input, &input); err != nil || input.Content == "" {
-			continue
-		}
-		for _, line := range strings.Split(input.Content, "\n") {
-			line = strings.TrimSpace(line)
-			if line == "" {
-				continue
-			}
-			// Strip leading # heading markers
-			line = strings.TrimLeft(line, "# ")
-			line = strings.TrimSpace(line)
-			if line != "" {
-				return truncate(line, 120)
-			}
+		// Strip leading # heading markers
+		line = strings.TrimLeft(line, "# ")
+		line = strings.TrimSpace(line)
+		if line != "" {
+			return truncate(line, 120)
 		}
 	}
 	return ""
@@ -216,8 +195,11 @@ type contentBlock struct {
 }
 
 // toolsWithDisplayableInput lists tool names whose Input should be preserved for display.
+// ExitPlanMode carries the full plan markdown in its input ("plan" key); that is the
+// canonical source for both the live approval view and the archived plan summary.
 var toolsWithDisplayableInput = map[string]bool{
 	"AskUserQuestion": true,
+	"ExitPlanMode":    true,
 }
 
 func parseLine(line []byte) (Message, bool) {
@@ -321,16 +303,6 @@ func parseAssistantEntry(entry jsonlEntry) (Message, bool) {
 		return Message{}, false
 	}
 
-	// Check if this message contains ExitPlanMode — if so, preserve the
-	// Write tool input so the plan content can be displayed.
-	hasExitPlanMode := false
-	for _, b := range blocks {
-		if b.Type == "tool_use" && b.Name == "ExitPlanMode" {
-			hasExitPlanMode = true
-			break
-		}
-	}
-
 	var displayBlocks []Block
 	for _, b := range blocks {
 		switch b.Type {
@@ -347,8 +319,6 @@ func parseAssistantEntry(entry jsonlEntry) (Message, bool) {
 				toolInput: b.Input,
 			}
 			if toolsWithDisplayableInput[b.Name] && len(b.Input) > 0 {
-				blk.Input = b.Input
-			} else if hasExitPlanMode && b.Name == "Write" && len(b.Input) > 0 {
 				blk.Input = b.Input
 			}
 			displayBlocks = append(displayBlocks, blk)
@@ -450,45 +420,6 @@ func attachSummaries(messages []Message, toolResults map[string]string) {
 				}
 			}
 			blk.Summary = summary
-		}
-	}
-}
-
-// preservePlanWriteInputs scans for ExitPlanMode tool calls and looks backwards
-// to find Write blocks in preceding assistant messages, preserving their input
-// so the plan content can be displayed. This handles the common case where the
-// Write (plan file) and ExitPlanMode are in separate messages.
-func preservePlanWriteInputs(messages []Message) {
-	for i, msg := range messages {
-		if msg.Role != "assistant" {
-			continue
-		}
-		hasExitPlanMode := false
-		for _, blk := range msg.Blocks {
-			if blk.Type == "tool_use" && blk.Text == "ExitPlanMode" {
-				hasExitPlanMode = true
-				break
-			}
-		}
-		if !hasExitPlanMode {
-			continue
-		}
-		// Scan backwards for the nearest assistant message with Write blocks.
-		for j := i - 1; j >= 0; j-- {
-			if messages[j].Role != "assistant" {
-				continue
-			}
-			found := false
-			for k := range messages[j].Blocks {
-				blk := &messages[j].Blocks[k]
-				if blk.Type == "tool_use" && blk.Text == "Write" && len(blk.toolInput) > 0 && len(blk.Input) == 0 {
-					blk.Input = blk.toolInput
-					found = true
-				}
-			}
-			if found {
-				break
-			}
 		}
 	}
 }

@@ -53,12 +53,16 @@ export interface WriteInput {
   content?: string;
 }
 
+export interface PlanInput {
+  plan?: string;
+}
+
 export interface TranscriptBlock {
   type: string;
   text: string;
   summary?: string;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  input?: AskQuestionInput & WriteInput & Record<string, any>;
+  input?: AskQuestionInput & WriteInput & PlanInput & Record<string, any>;
 }
 
 export interface TranscriptMessage {

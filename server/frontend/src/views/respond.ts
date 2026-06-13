@@ -80,10 +80,12 @@ function renderMessageContent(msg: TranscriptMessage): string {
   (msg.blocks || []).forEach((b) => {
     if (b.type === "tool_use" && b.text === "AskUserQuestion" && b.input) {
       content += renderAskQuestion(b.input);
-    } else if (b.type === "tool_use" && b.text === "Write" && b.input?.content) {
-      content += '<div class="plan-content">' + renderMarkdown(b.input.content) + "</div>";
     } else if (b.type === "tool_use" && b.text === "ExitPlanMode") {
-      content += '<div class="tool-use plan-approval">Plan ready for approval</div>';
+      if (b.input?.plan) {
+        content += '<div class="plan-content">' + renderMarkdown(b.input.plan) + "</div>";
+      } else {
+        content += '<div class="tool-use plan-approval">Plan ready for approval</div>';
+      }
     } else if (b.type === "tool_use") {
       const label = b.summary || b.text;
       content += '<div class="tool-use">' + escapeHtml(label) + "</div>";
