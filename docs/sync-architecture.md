@@ -180,6 +180,76 @@ Hooks for actions, capture-pane snapshot on the phone, `libghostty-vt` in
 reserve. The decision that picks the render lib isn't fidelity, it's canvas
 (`ghostty-web`) versus selectable DOM text (`wterm`); lean DOM on a phone.
 
+## Refinements after re-examination (2026-06-13)
+
+Three sharpenings from a second pass over the plan. None overturn the
+architecture; they tighten the live-view section and surface a Phase 3 hazard.
+
+**The "live view" is two jobs, and which one capture-pane serves is still open.**
+"Live view" quietly bundles a *status glance* (is it working, what did it just
+say, why did it stop) with a *readable conversation* (actually read the
+back-and-forth). capture-pane is unambiguously right for the glance. Whether it
+should ever become the readable transcript on the phone is the open question. The
+conservative line is **glance from capture-pane, read from JSONL, no overlap**,
+which keeps the TUI-parsing treadmill out by construction: you never extract
+structure from the pane, you only display it. The other branch lets the phone
+read the whole conversation off the pane, buying billing-free completeness on the
+live path but pulling in reflow and geometry work (this is the `libghostty-vt`
+job: feed it the byte stream, read a normalized grid). We don't have to decide
+now. The respond-view MVP only needs the glance, so build that first and let the
+readable-transcript question stay open until the live view is real and we can
+feel the tradeoff instead of guessing at it.
+
+**The geometry problem has a cheap MVP before libghostty-vt.** The canonical pane
+is the human's attach target, so its width is whatever they run (easily 200
+cols), which is hostile to a phone. Before reaching for a server-side VT emulator,
+`tmux capture-pane -p -e -J -S -<N>` covers the glance: `-J` joins soft-wrapped
+lines into logical lines, `-e` preserves color as ANSI, and xterm.js (or
+ghostty-web later) re-wraps at the phone's width. That's a real render with color
+and scrollback and no emulator. `libghostty-vt` earns its place only when we want
+to *reason about* screen state (working-vs-idle from the grid, diffing captures),
+which is a different need than showing it.
+
+**Phase 3's puppet-launcher can hang on a permission prompt.** Interactive-in-tmux
+beats `claude -p` for billing, but an *autonomous* interactive session has a
+failure mode a headless one doesn't: hit a permission prompt with no human at the
+pane and it blocks forever. So the launcher primitive isn't just spawn-pane +
+send-keys + watch-Stop-hook; it needs a permission posture per workspace (a
+pre-approved skill/tool allowlist, or a sandboxed workspace running
+skip-permissions, which has to square with bottom-up trust). Noted now because it
+shapes what the launcher must expose, even though it's far off.
+
+## Implementation sequence
+
+Concrete steps, ordered. A and B are independent; A ships first because it
+deletes the canary.
+
+**Step A — Actions onto hooks.** Today `HookEvent` (`hook/hook.go`) carries six
+fields and neither `tool_input` nor `transcript_path`. Add them, plus the
+hook-event discriminator for `PreToolUse`. Register a `PreToolUse` hook on
+`ExitPlanMode` so the plan text arrives directly in the payload; forward it to the
+daemon and render the approval view from hook data. Capture `transcript_path`
+once per session and store it, so the agent stops recomputing the cwd slug in
+`TranscriptPath`. Then delete `preservePlanWriteInputs` and the live-path
+plan-reconstruction scans in `transcript.go`. Catch: the new hook registration is
+a Claude Code settings change deployed per-node via `nix-config`, so this lands
+across two repos.
+
+**Step B — capture-pane glance on the respond view.** Add `CapturePane` to
+`tmux.go` and an agent endpoint to proxy it (the agent already does send-keys and
+pane queries; this is the read direction). On notification the respond view pulls
+a snapshot, and notify-time is the ideal trigger because it's exactly the moment
+context is wanted. MVP renders `-e -J` ANSI with xterm.js; ghostty-web is a later
+drop-in fidelity upgrade.
+
+**Step C — Demote JSONL to the async archive.** Mostly falls out of A and B:
+confirm nothing on the live path still calls the transcript parser, then keep it
+only for `ExtractSummary`, session browsing, and the Phase 2 dashboard, where
+completeness is the asset and lag is harmless.
+
+**Step D — Reserve.** `libghostty-vt` for reasoning about live screen state; the
+puppet-launcher for Phase 3, designed around the permission-posture note above.
+
 ## Sources
 
 - Anthropic ends subscription subsidy for agents June 15: https://www.techtimes.com/articles/317625/20260602/anthropic-ends-subscription-subsidy-agents-june-15-credit-pool-replaces-flat-rate-access.htm
