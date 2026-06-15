@@ -16,7 +16,7 @@ in
 
     package = mkOption {
       type = types.package;
-      default = self.packages.${pkgs.system}.default;
+      default = self.packages.${pkgs.stdenv.hostPlatform.system}.default;
       defaultText = literalExpression "sophon.packages.\${system}.default";
       description = "The sophon package to use.";
     };
