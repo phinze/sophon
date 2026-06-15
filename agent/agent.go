@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"time"
@@ -137,6 +138,44 @@ func (a *Agent) listenHost() string {
 	return "127.0.0.1"
 }
 
+// resolveAdvertiseURL returns the URL the daemon should use to reach this agent.
+// It resolves the configured advertise hostname to a concrete IPv4 address,
+// because the daemon may run somewhere (e.g. a Miren container) that can route
+// tailscale IPs but cannot resolve MagicDNS hostnames. It falls back to
+// localhost when no advertise URL is configured, and to the configured value if
+// the host is already an IP or cannot be resolved to an IPv4 address.
+func resolveAdvertiseURL(raw string, port int, lookup func(string) ([]net.IP, error), logger *slog.Logger) string {
+	if raw == "" {
+		return fmt.Sprintf("http://127.0.0.1:%d", port)
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		logger.Warn("could not parse advertise URL; advertising as-is", "url", raw, "error", err)
+		return raw
+	}
+	host := u.Hostname()
+	if host == "" || net.ParseIP(host) != nil {
+		return raw // nothing to resolve: already an IP or no host
+	}
+	ips, err := lookup(host)
+	if err != nil {
+		logger.Warn("could not resolve advertise host; advertising hostname", "host", host, "error", err)
+		return raw
+	}
+	for _, ip := range ips {
+		if v4 := ip.To4(); v4 != nil {
+			if p := u.Port(); p != "" {
+				u.Host = net.JoinHostPort(v4.String(), p)
+			} else {
+				u.Host = v4.String()
+			}
+			return u.String()
+		}
+	}
+	logger.Warn("no IPv4 for advertise host; advertising hostname", "host", host)
+	return raw
+}
+
 // heartbeat registers with the daemon periodically.
 func (a *Agent) heartbeat() {
 	a.register()
@@ -160,10 +199,7 @@ func (a *Agent) register() {
 		return
 	}
 
-	agentURL := a.cfg.AdvertiseURL
-	if agentURL == "" {
-		agentURL = fmt.Sprintf("http://127.0.0.1:%d", a.cfg.Port)
-	}
+	agentURL := resolveAdvertiseURL(a.cfg.AdvertiseURL, a.cfg.Port, net.LookupIP, a.logger)
 
 	payload := heartbeatPayload{
 		NodeName: a.cfg.NodeName,

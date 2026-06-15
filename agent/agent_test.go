@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -201,6 +202,39 @@ func TestHeartbeatOmitsAlivePanesOnError(t *testing.T) {
 	// alive_panes should be omitted from JSON when detection fails
 	if strings.Contains(string(receivedBody), "alive_panes") {
 		t.Error("alive_panes should be omitted on error")
+	}
+}
+
+func TestResolveAdvertiseURL(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	lookup := func(result []net.IP, err error) func(string) ([]net.IP, error) {
+		return func(string) ([]net.IP, error) { return result, err }
+	}
+	v4 := net.ParseIP("100.99.110.72")
+	v6 := net.ParseIP("fd7a:115c:a1e0::c739:7930")
+
+	tests := []struct {
+		name   string
+		raw    string
+		port   int
+		lookup func(string) ([]net.IP, error)
+		want   string
+	}{
+		{"empty falls back to localhost", "", 2588, lookup(nil, nil), "http://127.0.0.1:2588"},
+		{"hostname resolves to ipv4", "http://foxtrotbase.swallow-galaxy.ts.net:2588", 2588, lookup([]net.IP{v4}, nil), "http://100.99.110.72:2588"},
+		{"prefers ipv4 over ipv6", "http://host.ts.net:2588", 2588, lookup([]net.IP{v6, v4}, nil), "http://100.99.110.72:2588"},
+		{"already an ip is unchanged", "http://10.0.0.5:2588", 2588, lookup(nil, fmt.Errorf("should not be called")), "http://10.0.0.5:2588"},
+		{"lookup error keeps hostname", "http://host.ts.net:2588", 2588, lookup(nil, fmt.Errorf("nxdomain")), "http://host.ts.net:2588"},
+		{"ipv6-only keeps hostname", "http://host.ts.net:2588", 2588, lookup([]net.IP{v6}, nil), "http://host.ts.net:2588"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := resolveAdvertiseURL(tt.raw, tt.port, tt.lookup, logger)
+			if got != tt.want {
+				t.Errorf("resolveAdvertiseURL(%q) = %q, want %q", tt.raw, got, tt.want)
+			}
+		})
 	}
 }
 
