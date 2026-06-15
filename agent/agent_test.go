@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/phinze/sophon/transcript"
 )
 
 func newTestAgent(t *testing.T) *Agent {
@@ -235,6 +237,22 @@ func TestResolveAdvertiseURL(t *testing.T) {
 				t.Errorf("resolveAdvertiseURL(%q) = %q, want %q", tt.raw, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestTranscriptPathPrefersProvided(t *testing.T) {
+	a := newTestAgent(t)
+
+	// A hook-provided path wins.
+	if got := a.transcriptPath("/explicit/path.jsonl", "/home/u/proj", "sid"); got != "/explicit/path.jsonl" {
+		t.Errorf("got %q, want the provided path", got)
+	}
+
+	// Empty provided path falls back to the recomputed slug.
+	got := a.transcriptPath("", "/home/u/proj", "sid")
+	want := transcript.TranscriptPath(a.cfg.ClaudeDir, "/home/u/proj", "sid")
+	if got != want {
+		t.Errorf("fallback = %q, want %q", got, want)
 	}
 }
 

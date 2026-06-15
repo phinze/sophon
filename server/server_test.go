@@ -31,7 +31,7 @@ func (m *mockNodeOps) SendKeys(nodeName, pane, text string) error {
 	return nil
 }
 
-func (m *mockNodeOps) ReadTranscript(nodeName, sessionID, cwd string) (*transcript.Transcript, error) {
+func (m *mockNodeOps) ReadTranscript(nodeName, sessionID, cwd, transcriptPath string) (*transcript.Transcript, error) {
 	if m.transcripts != nil {
 		if tr, ok := m.transcripts[sessionID]; ok {
 			return tr, nil
@@ -40,7 +40,7 @@ func (m *mockNodeOps) ReadTranscript(nodeName, sessionID, cwd string) (*transcri
 	return &transcript.Transcript{}, nil
 }
 
-func (m *mockNodeOps) ReadSummary(nodeName, sessionID, cwd string) (*transcript.SessionSummary, error) {
+func (m *mockNodeOps) ReadSummary(nodeName, sessionID, cwd, transcriptPath string) (*transcript.SessionSummary, error) {
 	if m.summaries != nil {
 		if s, ok := m.summaries[sessionID]; ok {
 			return s, nil
@@ -682,5 +682,56 @@ func TestToolActivityDoesNotUpdateLastActivity(t *testing.T) {
 	sess, _ = h.store.GetSession("s1")
 	if sess.LastActivityAt.After(old) {
 		t.Errorf("LastActivityAt should not be updated by tool activity, was %v, expected %v", sess.LastActivityAt, old)
+	}
+}
+
+func TestHandlePlanStoresPlanText(t *testing.T) {
+	h := newTestHarness(t)
+	h.createSession(t, "s-plan", "%1", "/home/user/project")
+
+	body, _ := json.Marshal(map[string]string{
+		"plan":      "# Do the thing\n\nStep 1: go",
+		"node_name": "test-node",
+	})
+	req := httptest.NewRequest("POST", "/api/sessions/s-plan/plan", bytes.NewReader(body))
+	req.SetPathValue("id", "s-plan")
+	w := httptest.NewRecorder()
+	h.server.handlePlan(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("handlePlan: got %d, want 200", w.Code)
+	}
+
+	sess, err := h.store.GetSession("s-plan")
+	if err != nil {
+		t.Fatalf("GetSession: %v", err)
+	}
+	if sess.PlanText != "# Do the thing\n\nStep 1: go" {
+		t.Errorf("PlanText = %q", sess.PlanText)
+	}
+}
+
+func TestCreateSessionStoresTranscriptPath(t *testing.T) {
+	h := newTestHarness(t)
+	want := "/home/user/.claude/projects/-home-user-project/s-tp.jsonl"
+	body, _ := json.Marshal(map[string]string{
+		"session_id":      "s-tp",
+		"tmux_pane":       "%1",
+		"cwd":             "/home/user/project",
+		"node_name":       "test-node",
+		"transcript_path": want,
+	})
+	req := httptest.NewRequest("POST", "/api/sessions", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	h.server.handleCreateSession(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("createSession: got %d, want 201", w.Code)
+	}
+
+	sess, err := h.store.GetSession("s-tp")
+	if err != nil {
+		t.Fatalf("GetSession: %v", err)
+	}
+	if sess.TranscriptPath != want {
+		t.Errorf("TranscriptPath = %q, want %q", sess.TranscriptPath, want)
 	}
 }

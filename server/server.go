@@ -41,8 +41,8 @@ type Config struct {
 type NodeOps interface {
 	PaneFocused(nodeName, pane string) bool
 	SendKeys(nodeName, pane, text string) error
-	ReadTranscript(nodeName, sessionID, cwd string) (*transcript.Transcript, error)
-	ReadSummary(nodeName, sessionID, cwd string) (*transcript.SessionSummary, error)
+	ReadTranscript(nodeName, sessionID, cwd, transcriptPath string) (*transcript.Transcript, error)
+	ReadSummary(nodeName, sessionID, cwd, transcriptPath string) (*transcript.SessionSummary, error)
 }
 
 // Server is the sophon HTTP server.
@@ -101,12 +101,12 @@ func (o *agentProxyOps) SendKeys(nodeName, pane, text string) error {
 	return o.client.SendKeys(info.URL, pane, text)
 }
 
-func (o *agentProxyOps) ReadTranscript(nodeName, sessionID, cwd string) (*transcript.Transcript, error) {
+func (o *agentProxyOps) ReadTranscript(nodeName, sessionID, cwd, transcriptPath string) (*transcript.Transcript, error) {
 	info, ok := o.agents.Get(nodeName)
 	if !ok || !o.agents.IsHealthy(nodeName) {
 		return &transcript.Transcript{}, nil
 	}
-	tr, err := o.client.GetTranscript(info.URL, sessionID, cwd)
+	tr, err := o.client.GetTranscript(info.URL, sessionID, cwd, transcriptPath)
 	if err != nil {
 		o.logger.Debug("agent transcript error", "node", nodeName, "error", err)
 		return &transcript.Transcript{}, nil
@@ -114,12 +114,12 @@ func (o *agentProxyOps) ReadTranscript(nodeName, sessionID, cwd string) (*transc
 	return tr, nil
 }
 
-func (o *agentProxyOps) ReadSummary(nodeName, sessionID, cwd string) (*transcript.SessionSummary, error) {
+func (o *agentProxyOps) ReadSummary(nodeName, sessionID, cwd, transcriptPath string) (*transcript.SessionSummary, error) {
 	info, ok := o.agents.Get(nodeName)
 	if !ok || !o.agents.IsHealthy(nodeName) {
 		return nil, nil
 	}
-	summary, err := o.client.GetSummary(info.URL, sessionID, cwd)
+	summary, err := o.client.GetSummary(info.URL, sessionID, cwd, transcriptPath)
 	if err != nil {
 		o.logger.Debug("agent summary error", "node", nodeName, "error", err)
 		return nil, nil
@@ -138,6 +138,7 @@ func (s *Server) Run() error {
 	// API routes
 	mux.HandleFunc("POST /api/sessions", s.handleCreateSession)
 	mux.HandleFunc("POST /api/sessions/{id}/notify", s.handleNotify)
+	mux.HandleFunc("POST /api/sessions/{id}/plan", s.handlePlan)
 	mux.HandleFunc("POST /api/sessions/{id}/activity", s.handleActivity)
 	mux.HandleFunc("POST /api/sessions/{id}/tool-activity", s.handleToolActivity)
 	mux.HandleFunc("DELETE /api/sessions/{id}", s.handleDeleteSession)
@@ -170,10 +171,11 @@ func (s *Server) Run() error {
 
 func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		SessionID string `json:"session_id"`
-		TmuxPane  string `json:"tmux_pane"`
-		Cwd       string `json:"cwd"`
-		NodeName  string `json:"node_name"`
+		SessionID      string `json:"session_id"`
+		TmuxPane       string `json:"tmux_pane"`
+		Cwd            string `json:"cwd"`
+		NodeName       string `json:"node_name"`
+		TranscriptPath string `json:"transcript_path"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
@@ -189,6 +191,7 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		Cwd:            req.Cwd,
 		Project:        project,
 		NodeName:       req.NodeName,
+		TranscriptPath: req.TranscriptPath,
 		StartedAt:      now,
 		LastActivityAt: now,
 	}
@@ -280,6 +283,52 @@ func (s *Server) handleNotify(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
+// handlePlan stores the plan markdown captured from the ExitPlanMode PreToolUse
+// hook. This is the push path: the plan arrives directly from the hook instead
+// of being reconstructed from a transcript the daemon would have to pull.
+func (s *Server) handlePlan(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+
+	var req struct {
+		Plan     string `json:"plan"`
+		NodeName string `json:"node_name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+
+	sess, err := s.store.GetSession(id)
+	if errors.Is(err, store.ErrNotFound) {
+		sess = &store.Session{
+			ID:        id,
+			NodeName:  req.NodeName,
+			StartedAt: time.Now(),
+		}
+	} else if err != nil {
+		s.logger.Error("failed to get session", "error", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	sess.PlanText = req.Plan
+	sess.LastActivityAt = time.Now()
+	if err := s.store.CreateSession(sess); err != nil {
+		s.logger.Error("failed to save plan", "error", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	s.events.Publish(id, Event{
+		Type:    EventNotification,
+		Session: id,
+		Data:    mustJSON(map[string]string{"type": "plan_approval"}),
+	})
+
+	s.logger.Info("plan stored", "session_id", id, "plan_len", len(req.Plan))
+	w.WriteHeader(http.StatusOK)
+}
+
 // handleActivity records a turn completion (Stop hook) and optionally sends a
 // notification.  It does NOT mark the session as stopped — that only happens on
 // SessionEnd via handleDeleteSession.
@@ -316,7 +365,7 @@ func (s *Server) handleActivity(w http.ResponseWriter, r *http.Request) {
 
 	// Asynchronously fetch and store session summary
 	go func() {
-		summary, err := s.nodeOps.ReadSummary(sess.NodeName, id, sess.Cwd)
+		summary, err := s.nodeOps.ReadSummary(sess.NodeName, id, sess.Cwd, sess.TranscriptPath)
 		if err != nil || summary == nil {
 			return
 		}
@@ -458,7 +507,7 @@ func (s *Server) handleTranscript(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tr, err := s.nodeOps.ReadTranscript(sess.NodeName, id, sess.Cwd)
+	tr, err := s.nodeOps.ReadTranscript(sess.NodeName, id, sess.Cwd, sess.TranscriptPath)
 	if err != nil {
 		s.logger.Debug("transcript read failed", "error", err)
 		tr = &transcript.Transcript{}

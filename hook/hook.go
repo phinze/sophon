@@ -13,12 +13,14 @@ import (
 
 // HookEvent represents the JSON input from Claude Code hooks.
 type HookEvent struct {
-	HookEventName    string `json:"hook_event_name"`
-	SessionID        string `json:"session_id"`
-	Cwd              string `json:"cwd"`
-	NotificationType string `json:"notification_type"`
-	Message          string `json:"message"`
-	ToolName         string `json:"tool_name"`
+	HookEventName    string          `json:"hook_event_name"`
+	SessionID        string          `json:"session_id"`
+	Cwd              string          `json:"cwd"`
+	NotificationType string          `json:"notification_type"`
+	Message          string          `json:"message"`
+	ToolName         string          `json:"tool_name"`
+	ToolInput        json.RawMessage `json:"tool_input"`
+	TranscriptPath   string          `json:"transcript_path"`
 }
 
 // Config holds hook configuration.
@@ -52,17 +54,48 @@ func Run(cfg Config) error {
 		return handleTurnEnd(cfg, event)
 	case "SessionEnd":
 		return handleSessionEnd(cfg, event)
+	case "PreToolUse":
+		return handlePreToolUse(cfg, event)
 	default:
 		return handleToolActivity(cfg, event)
 	}
 }
 
+// handlePreToolUse forwards the plan to the daemon when Claude is about to exit
+// plan mode (the plan markdown lives in the tool input), then records tool
+// activity like any other tool call.
+func handlePreToolUse(cfg Config, event HookEvent) error {
+	if event.ToolName == "ExitPlanMode" {
+		// Best-effort: a failed plan post shouldn't drop the activity event.
+		_ = handlePlan(cfg, event)
+	}
+	return handleToolActivity(cfg, event)
+}
+
+func handlePlan(cfg Config, event HookEvent) error {
+	var input struct {
+		Plan string `json:"plan"`
+	}
+	if len(event.ToolInput) > 0 {
+		_ = json.Unmarshal(event.ToolInput, &input)
+	}
+	if input.Plan == "" {
+		return nil
+	}
+	body := map[string]interface{}{
+		"plan":      input.Plan,
+		"node_name": cfg.NodeName,
+	}
+	return postJSON(cfg.DaemonURL+"/api/sessions/"+event.SessionID+"/plan", body)
+}
+
 func handleSessionStart(cfg Config, event HookEvent, tmuxPane string) error {
 	body := map[string]interface{}{
-		"session_id": event.SessionID,
-		"tmux_pane":  tmuxPane,
-		"cwd":        event.Cwd,
-		"node_name":  cfg.NodeName,
+		"session_id":      event.SessionID,
+		"tmux_pane":       tmuxPane,
+		"cwd":             event.Cwd,
+		"node_name":       cfg.NodeName,
+		"transcript_path": event.TranscriptPath,
 	}
 	return postJSON(cfg.DaemonURL+"/api/sessions", body)
 }

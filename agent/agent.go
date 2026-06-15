@@ -67,7 +67,7 @@ func (a *Agent) handleTranscript(w http.ResponseWriter, r *http.Request) {
 	sessionID := r.PathValue("session_id")
 	cwd := r.URL.Query().Get("cwd")
 
-	path := transcript.TranscriptPath(a.cfg.ClaudeDir, cwd, sessionID)
+	path := a.transcriptPath(r.URL.Query().Get("path"), cwd, sessionID)
 	tr, err := transcript.Read(path)
 	if err != nil {
 		a.logger.Debug("transcript read failed", "path", path, "error", err)
@@ -82,7 +82,7 @@ func (a *Agent) handleSummary(w http.ResponseWriter, r *http.Request) {
 	sessionID := r.PathValue("session_id")
 	cwd := r.URL.Query().Get("cwd")
 
-	path := transcript.TranscriptPath(a.cfg.ClaudeDir, cwd, sessionID)
+	path := a.transcriptPath(r.URL.Query().Get("path"), cwd, sessionID)
 	tr, err := transcript.Read(path)
 	if err != nil {
 		a.logger.Debug("summary transcript read failed", "path", path, "error", err)
@@ -92,6 +92,16 @@ func (a *Agent) handleSummary(w http.ResponseWriter, r *http.Request) {
 	summary := transcript.ExtractSummary(tr)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(summary)
+}
+
+// transcriptPath returns the JSONL path to read. It prefers the path Claude
+// Code reported via its hooks (provided), falling back to recomputing it from
+// the cwd slug for sessions registered before the path was captured.
+func (a *Agent) transcriptPath(provided, cwd, sessionID string) string {
+	if provided != "" {
+		return provided
+	}
+	return transcript.TranscriptPath(a.cfg.ClaudeDir, cwd, sessionID)
 }
 
 func (a *Agent) handleSendKeys(w http.ResponseWriter, r *http.Request) {

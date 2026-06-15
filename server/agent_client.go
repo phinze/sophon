@@ -25,8 +25,8 @@ func newAgentClient() *agentClient {
 }
 
 // GetTranscript fetches the transcript from an agent.
-func (c *agentClient) GetTranscript(agentURL, sessionID, cwd string) (*transcript.Transcript, error) {
-	u := fmt.Sprintf("%s/api/transcript/%s?cwd=%s", agentURL, sessionID, url.QueryEscape(cwd))
+func (c *agentClient) GetTranscript(agentURL, sessionID, cwd, path string) (*transcript.Transcript, error) {
+	u := fmt.Sprintf("%s/api/transcript/%s?cwd=%s&path=%s", agentURL, sessionID, url.QueryEscape(cwd), url.QueryEscape(path))
 	client := &http.Client{Timeout: c.transcriptTimeout}
 	resp, err := client.Get(u)
 	if err != nil {
@@ -46,8 +46,8 @@ func (c *agentClient) GetTranscript(agentURL, sessionID, cwd string) (*transcrip
 }
 
 // GetSummary fetches the session summary from an agent.
-func (c *agentClient) GetSummary(agentURL, sessionID, cwd string) (*transcript.SessionSummary, error) {
-	u := fmt.Sprintf("%s/api/summary/%s?cwd=%s", agentURL, sessionID, url.QueryEscape(cwd))
+func (c *agentClient) GetSummary(agentURL, sessionID, cwd, path string) (*transcript.SessionSummary, error) {
+	u := fmt.Sprintf("%s/api/summary/%s?cwd=%s&path=%s", agentURL, sessionID, url.QueryEscape(cwd), url.QueryEscape(path))
 	client := &http.Client{Timeout: c.actionTimeout}
 	resp, err := client.Get(u)
 	if err != nil {

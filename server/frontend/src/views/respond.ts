@@ -244,6 +244,11 @@ export function mount(params: Record<string, string>, sse: SSEManager): void {
       });
       textInput?.focus();
 
+      // If the session already carries a pushed plan (from the ExitPlanMode
+      // hook), show the approval buttons immediately rather than waiting for the
+      // transcript to load.
+      if (sess.plan_text) showPlanButtons();
+
       loadTranscript();
     })
     .catch(() => {
