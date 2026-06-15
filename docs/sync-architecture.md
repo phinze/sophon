@@ -250,6 +250,31 @@ completeness is the asset and lag is harmless.
 **Step D — Reserve.** `libghostty-vt` for reasoning about live screen state; the
 puppet-launcher for Phase 3, designed around the permission-posture note above.
 
+## Field note: the daemon/agent network seam (2026-06-15)
+
+A production regression made the live-path fragility concrete. Every transcript
+on the phone went blank, while the agents were healthy and the parser was fine.
+The cause was a network seam: the daemon had moved into a Miren container that
+can route tailscale IPs but cannot resolve MagicDNS hostnames, and the agents
+advertise `host.swallow-galaxy.ts.net`. So the daemon's on-demand calls to
+agents failed DNS resolution, and `ReadTranscript` swallowed the error and
+returned an empty transcript. Heartbeats kept working because those go the other
+way (agent out to the public ingress), which is why the sessions list looked
+healthy while every conversation was empty.
+
+The immediate fix was to have agents resolve their advertise hostname to an IPv4
+at registration time, so the daemon dials an address the container can route.
+That restored the live path.
+
+The lesson matters for Step B. The live *pull* model (daemon dials agents on
+demand) crosses the Miren-overlay/tailnet seam inbound, which is precisely the
+brittle boundary. The capture-pane snapshot should instead be *pushed*: the
+agent captures locally and POSTs to the daemon over the same ingress the
+heartbeat already uses, so it never crosses the seam inbound. This is the push
+direction floated above; the incident is concrete evidence for preferring it.
+Keep the (now-fixed) pull path as the fallback and for on-demand archive reads,
+but build Step B push-first.
+
 ## Sources
 
 - Anthropic ends subscription subsidy for agents June 15: https://www.techtimes.com/articles/317625/20260602/anthropic-ends-subscription-subsidy-agents-june-15-credit-pool-replaces-flat-rate-access.htm
