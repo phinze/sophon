@@ -6,3 +6,13 @@ port = 2587
 [services.web.concurrency]
 mode = "fixed"
 num_instances = 1
+
+# Persistent SQLite lives at /miren/data/local/sophon. Newer miren made the
+# host mount opt-in (it used to be auto-mounted for every app), and sophon's
+# env vars don't reference the path so the backward-compat shim doesn't fire.
+# Declare it explicitly so the mount is deterministic and the app is pinned
+# to the coordinator as a single stateful instance.
+[[services.web.disks]]
+name = "data"
+provider = "local"
+mount_path = "/miren/data/local"
