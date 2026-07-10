@@ -47,7 +47,9 @@ func cwdToSlug(cwd string) string {
 	return slug
 }
 
-// Read parses a Claude Code JSONL transcript file and returns displayable messages.
+// Read parses Claude Code, Codex, or Antigravity JSONL into one display model.
+// The formats have distinct top-level record types, so detection is per-line
+// and requires no provider flag or filename convention.
 func Read(path string) (*Transcript, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -186,12 +188,12 @@ type messageEnvelope struct {
 // contentBlock is a single block in the content array.
 type contentBlock struct {
 	Type      string          `json:"type"`
-	ID        string          `json:"id"`          // tool_use ID
+	ID        string          `json:"id"` // tool_use ID
 	Text      string          `json:"text"`
-	Name      string          `json:"name"`         // for tool_use
-	Input     json.RawMessage `json:"input"`        // for tool_use
-	ToolUseID string          `json:"tool_use_id"`  // for tool_result link
-	Content   any             `json:"content"`      // for tool_result
+	Name      string          `json:"name"`        // for tool_use
+	Input     json.RawMessage `json:"input"`       // for tool_use
+	ToolUseID string          `json:"tool_use_id"` // for tool_result link
+	Content   any             `json:"content"`     // for tool_result
 }
 
 // toolsWithDisplayableInput lists tool names whose Input should be preserved for display.
@@ -218,9 +220,138 @@ func parseLine(line []byte) (Message, bool) {
 		return parseUserEntry(entry)
 	case "assistant":
 		return parseAssistantEntry(entry)
+	case "response_item":
+		return parseCodexEntry(line, entry.Timestamp)
+	case "USER_INPUT", "PLANNER_RESPONSE":
+		return parseAntigravityEntry(line)
 	default:
 		return Message{}, false
 	}
+}
+
+type codexEntry struct {
+	Payload struct {
+		Type    string          `json:"type"`
+		Role    string          `json:"role"`
+		Content []contentBlock  `json:"content"`
+		CallID  string          `json:"call_id"`
+		Name    string          `json:"name"`
+		Input   json.RawMessage `json:"input"`
+	} `json:"payload"`
+}
+
+func parseCodexEntry(line []byte, timestamp string) (Message, bool) {
+	var entry codexEntry
+	if err := json.Unmarshal(line, &entry); err != nil {
+		return Message{}, false
+	}
+	ts, _ := time.Parse(time.RFC3339Nano, timestamp)
+	switch entry.Payload.Type {
+	case "message":
+		if entry.Payload.Role != "user" && entry.Payload.Role != "assistant" {
+			return Message{}, false
+		}
+		var blocks []Block
+		for _, content := range entry.Payload.Content {
+			if content.Type != "input_text" && content.Type != "output_text" {
+				continue
+			}
+			text := stripCodexContext(content.Text)
+			if text != "" {
+				blocks = append(blocks, Block{Type: "text", Text: text})
+			}
+		}
+		if len(blocks) == 0 {
+			return Message{}, false
+		}
+		return Message{Role: entry.Payload.Role, Timestamp: ts, Blocks: blocks}, true
+	case "custom_tool_call", "function_call":
+		input := normalizeJSONInput(entry.Payload.Input)
+		return Message{Role: "assistant", Timestamp: ts, Blocks: []Block{{
+			Type:      "tool_use",
+			Text:      entry.Payload.Name,
+			toolUseID: entry.Payload.CallID,
+			toolInput: input,
+		}}}, true
+	default:
+		return Message{}, false
+	}
+}
+
+func normalizeJSONInput(input json.RawMessage) json.RawMessage {
+	var encoded string
+	if json.Unmarshal(input, &encoded) == nil && json.Valid([]byte(encoded)) {
+		return json.RawMessage(encoded)
+	}
+	if json.Valid(input) {
+		return input
+	}
+	return nil
+}
+
+type antigravityEntry struct {
+	Type      string `json:"type"`
+	Source    string `json:"source"`
+	CreatedAt string `json:"created_at"`
+	Content   string `json:"content"`
+	ToolCalls []struct {
+		Name string          `json:"name"`
+		Args json.RawMessage `json:"args"`
+	} `json:"tool_calls"`
+}
+
+func parseAntigravityEntry(line []byte) (Message, bool) {
+	var entry antigravityEntry
+	if err := json.Unmarshal(line, &entry); err != nil {
+		return Message{}, false
+	}
+	ts, _ := time.Parse(time.RFC3339Nano, entry.CreatedAt)
+	switch entry.Type {
+	case "USER_INPUT":
+		text := extractAntigravityUserRequest(entry.Content)
+		if text == "" {
+			return Message{}, false
+		}
+		return Message{Role: "user", Timestamp: ts, Blocks: []Block{{Type: "text", Text: text}}}, true
+	case "PLANNER_RESPONSE":
+		if entry.Source != "MODEL" {
+			return Message{}, false
+		}
+		var blocks []Block
+		if text := strings.TrimSpace(entry.Content); text != "" {
+			blocks = append(blocks, Block{Type: "text", Text: text})
+		}
+		for _, call := range entry.ToolCalls {
+			blocks = append(blocks, Block{Type: "tool_use", Text: call.Name, toolInput: call.Args})
+		}
+		if len(blocks) == 0 {
+			return Message{}, false
+		}
+		return Message{Role: "assistant", Timestamp: ts, Blocks: blocks}, true
+	default:
+		return Message{}, false
+	}
+}
+
+var antigravityUserRequestRe = regexp.MustCompile(`(?s)<USER_REQUEST>\s*(.*?)\s*</USER_REQUEST>`)
+
+func extractAntigravityUserRequest(content string) string {
+	if match := antigravityUserRequestRe.FindStringSubmatch(content); len(match) == 2 {
+		return strings.TrimSpace(match[1])
+	}
+	return strings.TrimSpace(content)
+}
+
+// Codex stores injected developer/environment context as user-role response
+// items. It is useful to the model but is not part of the human conversation.
+func stripCodexContext(text string) string {
+	trimmed := strings.TrimSpace(text)
+	for _, prefix := range []string{"<environment_context>", "# AGENTS.md instructions", "<INSTRUCTIONS>"} {
+		if strings.HasPrefix(trimmed, prefix) {
+			return ""
+		}
+	}
+	return trimmed
 }
 
 func parseUserEntry(entry jsonlEntry) (Message, bool) {
@@ -477,6 +608,30 @@ func summarizeTool(name string, input json.RawMessage) string {
 	case "WebFetch":
 		if u := getString("url"); u != "" {
 			return "WebFetch " + truncate(u, 50)
+		}
+	case "exec", "exec_command", "run_command":
+		for _, key := range []string{"cmd", "command", "CommandLine"} {
+			if cmd := getString(key); cmd != "" {
+				return "Run: " + truncate(cmd, 50)
+			}
+		}
+	case "view_file":
+		if p := getString("AbsolutePath"); p != "" {
+			return "Read " + shortenPath(p)
+		}
+	case "write_to_file", "replace_file_content", "multi_replace_file_content":
+		if p := getString("TargetFile"); p != "" {
+			return "Edit " + shortenPath(p)
+		}
+	case "list_dir":
+		if p := getString("DirectoryPath"); p != "" {
+			return "List " + shortenPath(p)
+		}
+	case "search_web":
+		for _, key := range []string{"query", "Query"} {
+			if q := getString(key); q != "" {
+				return fmt.Sprintf("Search «%s»", truncate(q, 40))
+			}
 		}
 	}
 

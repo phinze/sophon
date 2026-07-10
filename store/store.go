@@ -15,7 +15,7 @@ const currentSchemaVersion = 6
 // ErrNotFound is returned when a session is not found.
 var ErrNotFound = errors.New("session not found")
 
-// Session represents a Claude Code session.
+// Session represents a supported coding-agent session.
 type Session struct {
 	ID             string    `json:"session_id"`
 	TmuxPane       string    `json:"tmux_pane"`
@@ -23,7 +23,7 @@ type Session struct {
 	Project        string    `json:"project"`
 	NodeName       string    `json:"node_name"`
 	StartedAt      time.Time `json:"started_at"`
-	StoppedAt      time.Time `json:"stopped_at,omitempty"`      // zero means active
+	StoppedAt      time.Time `json:"stopped_at,omitempty"`       // zero means active
 	LastActivityAt time.Time `json:"last_activity_at,omitempty"` // tracks last meaningful event
 
 	// Latest notification context
@@ -36,7 +36,7 @@ type Session struct {
 	Topic       string `json:"topic,omitempty"`
 	PlanSummary string `json:"plan_summary,omitempty"`
 
-	// Pane title set by Claude Code (e.g. "Migrate blog to Miren")
+	// Pane title set by the terminal agent (e.g. "Migrate blog to Miren")
 	PaneTitle string `json:"pane_title,omitempty"`
 
 	// Plan markdown captured from the ExitPlanMode hook (push, not transcript).

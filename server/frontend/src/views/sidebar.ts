@@ -5,7 +5,7 @@ import { SSEManager } from "../sse";
 let selectedSessionId = "";
 let recentCollapsed = true;
 
-// Strip braille spinner characters (⠐⠂⠄⠈⠑⠒⠔⠘⠡⠢⠤⠨⠰ etc.) and ✳ prefix from Claude pane titles
+// Strip common spinner characters and the ✳ prefix from agent pane titles.
 function stripSpinnerPrefix(title: string): string {
   return title.replace(/^[\u2800-\u28FF✳]\s*/, "").trim();
 }
@@ -44,7 +44,7 @@ function renderSidebarCard(s: Session, isActive: boolean): string {
   if (s.node_name) html += '<span class="sb-node">' + escapeHtml(s.node_name) + "</span>";
   html += "</div>";
 
-  // Show pane title (task description set by Claude Code)
+  // Show pane title (task description set by the terminal agent)
   const paneTitle = stripSpinnerPrefix(s.pane_title || "");
   if (paneTitle && paneTitle !== "Claude Code") {
     html += '<div class="sb-pane-title">' + escapeHtml(paneTitle) + "</div>";

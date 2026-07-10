@@ -1,15 +1,15 @@
 # sophon
 
-Notification + response relay for Claude Code sessions. Observes hook events, sends push notifications via ntfy, and lets you respond from your phone via a web UI that injects text into the tmux pane.
+Notification + response relay for Claude Code, Codex, and Antigravity CLI sessions. Observes hook events and lets you respond from your phone via a web UI that injects text into the tmux pane.
 
 ## Architecture
 
 - `sophon daemon` — Coordinator HTTP server: session state, web UI, ntfy notifications. Proxies node-local operations (transcript, tmux send-keys, pane focus) to the appropriate agent.
 - `sophon agent` — Per-node agent: reads transcripts from local filesystem, executes tmux send-keys, checks pane focus. Registers with daemon via heartbeat.
-- `sophon hook` — Reads Claude Code hook JSON from stdin, forwards to daemon with `node_name`. Falls back to direct ntfy if daemon is down.
+- `sophon hook` — Normalizes Claude Code, Codex, or Antigravity hook JSON and forwards it to the daemon with `node_name`.
 
 ```
-Hook → Daemon (coordinator) → Agent (per-node) → tmux / transcript files
+Provider hook → Daemon (coordinator) → Agent (per-node) → tmux / transcript files
 ```
 
 ## Building
@@ -64,4 +64,4 @@ nh darwin switch .                       # apply on macOS
 
 ## Nix Integration
 
-The flake exports `homeManagerModules.default` for declarative configuration including systemd services (daemon + agent) and Claude Code hook wiring.
+The flake exports `homeManagerModules.default` for declarative installation and systemd/launchd agent services. See README.md for provider hook wiring.

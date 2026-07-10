@@ -185,16 +185,24 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	project := store.ProjectFromCwd(req.Cwd)
 
 	now := time.Now()
-	sess := &store.Session{
-		ID:             req.SessionID,
-		TmuxPane:       req.TmuxPane,
-		Cwd:            req.Cwd,
-		Project:        project,
-		NodeName:       req.NodeName,
-		TranscriptPath: req.TranscriptPath,
-		StartedAt:      now,
-		LastActivityAt: now,
+	sess, err := s.store.GetSession(req.SessionID)
+	if errors.Is(err, store.ErrNotFound) {
+		sess = &store.Session{ID: req.SessionID, StartedAt: now}
+	} else if err != nil {
+		s.logger.Error("failed to look up session", "error", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
 	}
+	// Session registration is intentionally idempotent. Antigravity's closest
+	// start signal is PreInvocation, which may fire again for later turns.
+	// Refresh routing metadata without erasing notification/summary state.
+	sess.TmuxPane = req.TmuxPane
+	sess.Cwd = req.Cwd
+	sess.Project = project
+	sess.NodeName = req.NodeName
+	sess.TranscriptPath = req.TranscriptPath
+	sess.StoppedAt = time.Time{}
+	sess.LastActivityAt = now
 
 	if err := s.store.CreateSession(sess); err != nil {
 		s.logger.Error("failed to create session", "error", err)
@@ -597,7 +605,7 @@ func (s *Server) reconcileSessions(nodeName string, alivePanes []string) {
 
 	for _, id := range toStop {
 		s.events.Publish(id, Event{Type: EventSessionEnd, Session: id})
-		s.logger.Info("session reconciled (claude not running)", "session_id", id, "node", nodeName)
+		s.logger.Info("session reconciled (agent not running)", "session_id", id, "node", nodeName)
 	}
 }
 
@@ -723,4 +731,3 @@ func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(sess)
 }
-

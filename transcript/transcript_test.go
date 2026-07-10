@@ -194,6 +194,75 @@ func TestReadMixedConversation(t *testing.T) {
 	}
 }
 
+func TestReadCodexConversation(t *testing.T) {
+	jsonl := `{"timestamp":"2026-07-10T12:00:00Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Fix the widget"}]}}
+{"timestamp":"2026-07-10T12:00:01Z","type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"internal context"}]}}
+{"timestamp":"2026-07-10T12:00:02Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"I'll inspect it."}]}}
+{"timestamp":"2026-07-10T12:00:03Z","type":"response_item","payload":{"type":"custom_tool_call","call_id":"call-1","name":"functions.exec","input":"{\"cmd\":\"go test ./...\"}"}}
+`
+
+	tr := readFromString(t, jsonl)
+	if len(tr.Messages) != 3 {
+		t.Fatalf("got %d messages, want 3", len(tr.Messages))
+	}
+	if tr.Messages[0].Role != "user" || tr.Messages[0].Blocks[0].Text != "Fix the widget" {
+		t.Errorf("user message = %+v", tr.Messages[0])
+	}
+	if tr.Messages[1].Role != "assistant" || tr.Messages[1].Blocks[0].Text != "I'll inspect it." {
+		t.Errorf("assistant message = %+v", tr.Messages[1])
+	}
+	tool := tr.Messages[2].Blocks[0]
+	if tool.Type != "tool_use" || tool.Text != "functions.exec" {
+		t.Errorf("tool block = %+v", tool)
+	}
+}
+
+func TestReadCodexSkipsInjectedContext(t *testing.T) {
+	jsonl := `{"timestamp":"2026-07-10T12:00:00Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<environment_context>\ninternal\n</environment_context>"}]}}` + "\n"
+	tr := readFromString(t, jsonl)
+	if len(tr.Messages) != 0 {
+		t.Fatalf("expected injected context to be hidden, got %d messages", len(tr.Messages))
+	}
+}
+
+func TestReadAntigravityConversation(t *testing.T) {
+	jsonl := `{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","created_at":"2026-07-10T12:00:00Z","content":"<USER_REQUEST> Fix the widget </USER_REQUEST> <ADDITIONAL_METADATA>noise</ADDITIONAL_METADATA>"}
+{"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-07-10T12:00:01Z","content":"I'll inspect it.","tool_calls":[{"name":"view_file","args":{"AbsolutePath":"/workspace/widget.go"}}]}
+{"step_index":2,"source":"MODEL","type":"VIEW_FILE","status":"DONE","created_at":"2026-07-10T12:00:02Z","content":"tool output"}
+`
+
+	tr := readFromString(t, jsonl)
+	if len(tr.Messages) != 2 {
+		t.Fatalf("got %d messages, want 2", len(tr.Messages))
+	}
+	if tr.Messages[0].Role != "user" || tr.Messages[0].Blocks[0].Text != "Fix the widget" {
+		t.Errorf("user message = %+v", tr.Messages[0])
+	}
+	blocks := tr.Messages[1].Blocks
+	if len(blocks) != 2 || blocks[0].Text != "I'll inspect it." || blocks[1].Text != "view_file" {
+		t.Errorf("assistant blocks = %+v", blocks)
+	}
+}
+
+func TestProviderToolSummaries(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"exec", `{"cmd":"go test ./..."}`, "Run: go test ./..."},
+		{"run_command", `{"CommandLine":"npm test"}`, "Run: npm test"},
+		{"view_file", `{"AbsolutePath":"/workspace/pkg/widget.go"}`, "Read workspace/pkg/widget.go"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := summarizeTool(tt.name, json.RawMessage(tt.input)); got != tt.want {
+				t.Errorf("summary = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestReadAskUserQuestionPreservesInput(t *testing.T) {
 	jsonl := `{"type":"assistant","timestamp":"2026-01-01T00:00:01.000Z","message":{"role":"assistant","content":[{"type":"text","text":"I have a question."},{"type":"tool_use","id":"t1","name":"AskUserQuestion","input":{"questions":[{"question":"Which approach?","header":"Approach","options":[{"label":"Option A","description":"First option"},{"label":"Option B","description":"Second option"}],"multiSelect":false}]}}]}}` + "\n"
 

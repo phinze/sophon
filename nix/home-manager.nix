@@ -12,7 +12,7 @@ let
 in
 {
   options.services.sophon = {
-    enable = mkEnableOption "sophon notification + response relay for Claude Code";
+    enable = mkEnableOption "sophon notification + response relay for coding agents";
 
     package = mkOption {
       type = types.package;
@@ -49,7 +49,7 @@ in
         "--node-name ${cfg.nodeName}"
       ];
       defaultText = literalExpression ''"''${cfg.package}/bin/sophon hook --daemon-url ''${cfg.daemonUrl} --node-name ''${cfg.nodeName}"'';
-      description = "Full hook command with daemon URL and node name baked in. Use this in Claude Code hook configuration.";
+      description = "Base hook command with daemon URL and node name baked in. Add the provider and event flags required by the agent hook configuration.";
     };
 
     minSessionAge = mkOption {

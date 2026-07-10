@@ -7,7 +7,7 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintf(os.Stderr, "Usage: sophon <command>\n\nCommands:\n  daemon  Run the coordinator HTTP server\n  agent   Run the per-node agent (transcript, tmux)\n  hook    Process Claude Code hook events from stdin\n")
+		fmt.Fprintf(os.Stderr, "Usage: sophon <command>\n\nCommands:\n  daemon  Run the coordinator HTTP server\n  agent   Run the per-node agent (transcript, tmux)\n  hook    Process Claude Code, Codex, or Antigravity hook events from stdin\n")
 		os.Exit(1)
 	}
 

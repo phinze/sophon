@@ -162,7 +162,7 @@ func TestHeartbeatIncludesAlivePanes(t *testing.T) {
 			NodeName:  "test-node",
 		},
 		logger: logger,
-		listClaudePanes: func() (map[string]bool, error) {
+		listAgentPanes: func() (map[string]bool, error) {
 			return map[string]bool{"%0": true, "%3": true}, nil
 		},
 	}
@@ -194,7 +194,7 @@ func TestHeartbeatOmitsAlivePanesOnError(t *testing.T) {
 			NodeName:  "test-node",
 		},
 		logger: logger,
-		listClaudePanes: func() (map[string]bool, error) {
+		listAgentPanes: func() (map[string]bool, error) {
 			return nil, fmt.Errorf("tmux not running")
 		},
 	}

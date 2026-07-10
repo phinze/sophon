@@ -1,5 +1,5 @@
 {
-  description = "sophon - notification + response relay for Claude Code";
+  description = "sophon - notification + response relay for coding agents";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";

@@ -18,8 +18,8 @@ import (
 type mockNodeOps struct {
 	focused     bool
 	sentKeys    []string
-	transcripts map[string]*transcript.Transcript       // keyed by sessionID
-	summaries   map[string]*transcript.SessionSummary    // keyed by sessionID
+	transcripts map[string]*transcript.Transcript     // keyed by sessionID
+	summaries   map[string]*transcript.SessionSummary // keyed by sessionID
 }
 
 func (m *mockNodeOps) PaneFocused(nodeName, pane string) bool {
@@ -236,6 +236,29 @@ func TestLastActivitySetOnCreate(t *testing.T) {
 	}
 	if sess.LastActivityAt.IsZero() {
 		t.Error("LastActivityAt should not be zero")
+	}
+}
+
+func TestCreateSessionIsIdempotent(t *testing.T) {
+	h := newTestHarness(t)
+	h.createSession(t, "s1", "%5", "/home/user/project")
+	h.notify(t, "s1", "permission_prompt", "Allow command?")
+
+	before, err := h.store.GetSession("s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.createSession(t, "s1", "%5", "/home/user/project")
+	after, err := h.store.GetSession("s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !after.StartedAt.Equal(before.StartedAt) {
+		t.Errorf("StartedAt changed from %v to %v", before.StartedAt, after.StartedAt)
+	}
+	if after.NotificationType != "permission_prompt" || after.NotifyMessage != "Allow command?" {
+		t.Errorf("notification state was reset: %+v", after)
 	}
 }
 

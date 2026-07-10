@@ -21,6 +21,20 @@ type HookEvent struct {
 	ToolName         string          `json:"tool_name"`
 	ToolInput        json.RawMessage `json:"tool_input"`
 	TranscriptPath   string          `json:"transcript_path"`
+
+	// Antigravity uses a separate, camelCase hook contract. These fields are
+	// normalized into the Claude/Codex-shaped fields above before dispatch.
+	ConversationID      string   `json:"conversationId"`
+	WorkspacePaths      []string `json:"workspacePaths"`
+	AGTranscriptPath    string   `json:"transcriptPath"`
+	InvocationNum       int      `json:"invocationNum"`
+	ExecutionNum        int      `json:"executionNum"`
+	TerminationReason   string   `json:"terminationReason"`
+	FullyIdle           bool     `json:"fullyIdle"`
+	AntigravityToolCall struct {
+		Name string          `json:"name"`
+		Args json.RawMessage `json:"args"`
+	} `json:"toolCall"`
 }
 
 // Config holds hook configuration.
@@ -28,6 +42,8 @@ type Config struct {
 	DaemonURL     string
 	NodeName      string
 	MinSessionAge int
+	Provider      string
+	EventName     string
 }
 
 // Run reads a hook event from stdin and forwards it to the daemon.
@@ -41,15 +57,23 @@ func Run(cfg Config) error {
 	if err := json.Unmarshal(input, &event); err != nil {
 		return fmt.Errorf("parsing hook JSON: %w", err)
 	}
+	event = normalizeEvent(cfg, event)
 
 	// Try to get the tmux pane from the environment
 	tmuxPane := os.Getenv("TMUX_PANE")
 
 	switch event.HookEventName {
 	case "SessionStart":
+		// Antigravity invokes PreInvocation before every model call. Invocation
+		// zero is the conversation start; subsequent calls are activity only.
+		if event.ConversationID != "" && event.InvocationNum != 0 {
+			return handleToolActivity(cfg, event)
+		}
 		return handleSessionStart(cfg, event, tmuxPane)
 	case "Notification":
 		return handleNotification(cfg, event)
+	case "PermissionRequest":
+		return handlePermissionRequest(cfg, event)
 	case "Stop":
 		return handleTurnEnd(cfg, event)
 	case "SessionEnd":
@@ -59,6 +83,33 @@ func Run(cfg Config) error {
 	default:
 		return handleToolActivity(cfg, event)
 	}
+}
+
+// normalizeEvent adapts Antigravity's camelCase lifecycle payload to the
+// Claude-compatible schema shared by Claude Code and Codex.
+func normalizeEvent(cfg Config, event HookEvent) HookEvent {
+	if cfg.Provider != "antigravity" && event.ConversationID == "" {
+		return event
+	}
+
+	event.SessionID = event.ConversationID
+	event.TranscriptPath = event.AGTranscriptPath
+	if len(event.WorkspacePaths) > 0 {
+		event.Cwd = event.WorkspacePaths[0]
+	}
+	event.HookEventName = cfg.EventName
+	switch cfg.EventName {
+	case "PreInvocation":
+		event.HookEventName = "SessionStart"
+	case "PostInvocation":
+		event.HookEventName = "PostToolUse"
+	case "Stop":
+		event.HookEventName = "Stop"
+	case "PreToolUse", "PostToolUse":
+		event.ToolName = event.AntigravityToolCall.Name
+		event.ToolInput = event.AntigravityToolCall.Args
+	}
+	return event
 }
 
 // handlePreToolUse forwards the plan to the daemon when Claude is about to exit
@@ -121,6 +172,22 @@ func handleNotification(cfg Config, event HookEvent) error {
 		"node_name":         cfg.NodeName,
 	}
 
+	return postJSON(cfg.DaemonURL+"/api/sessions/"+event.SessionID+"/notify", body)
+}
+
+func handlePermissionRequest(cfg Config, event HookEvent) error {
+	repo := repoFromCwd(event.Cwd)
+	message := event.ToolName
+	if message == "" {
+		message = "Codex is waiting for approval"
+	}
+	body := map[string]interface{}{
+		"notification_type": "permission_prompt",
+		"title":             repo + " · Needs approval",
+		"message":           message,
+		"cwd":               event.Cwd,
+		"node_name":         cfg.NodeName,
+	}
 	return postJSON(cfg.DaemonURL+"/api/sessions/"+event.SessionID+"/notify", body)
 }
 

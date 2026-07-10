@@ -29,21 +29,21 @@ type Agent struct {
 	logger *slog.Logger
 
 	// Injectable for testing
-	paneFocused     func(pane string) bool
-	sendKeys        func(pane, text string) error
-	listClaudePanes func() (map[string]bool, error)
-	listPaneTitles  func() (map[string]string, error)
+	paneFocused    func(pane string) bool
+	sendKeys       func(pane, text string) error
+	listAgentPanes func() (map[string]bool, error)
+	listPaneTitles func() (map[string]string, error)
 }
 
 // New creates a new Agent.
 func New(cfg Config, logger *slog.Logger) *Agent {
 	return &Agent{
-		cfg:             cfg,
-		logger:          logger,
-		paneFocused:     tmux.PaneFocused,
-		sendKeys:        tmux.SendKeys,
-		listClaudePanes: tmux.ListClaudePanes,
-		listPaneTitles:  tmux.ListPaneTitles,
+		cfg:            cfg,
+		logger:         logger,
+		paneFocused:    tmux.PaneFocused,
+		sendKeys:       tmux.SendKeys,
+		listAgentPanes: tmux.ListAgentPanes,
+		listPaneTitles: tmux.ListPaneTitles,
 	}
 }
 
@@ -216,11 +216,11 @@ func (a *Agent) register() {
 		URL:      agentURL,
 	}
 
-	// Detect claude panes; if detection fails, omit alive_panes (skip reconciliation)
-	if a.listClaudePanes != nil {
-		panes, err := a.listClaudePanes()
+	// Detect supported agent panes; if detection fails, omit alive_panes.
+	if a.listAgentPanes != nil {
+		panes, err := a.listAgentPanes()
 		if err != nil {
-			a.logger.Debug("failed to list claude panes", "error", err)
+			a.logger.Debug("failed to list agent panes", "error", err)
 		} else {
 			// Always include the field (even empty) to signal "agent checked"
 			payload.AlivePanes = make([]string, 0, len(panes))
@@ -228,7 +228,7 @@ func (a *Agent) register() {
 				payload.AlivePanes = append(payload.AlivePanes, paneID)
 			}
 
-			// Get pane titles for alive claude panes
+			// Get pane titles for alive agent panes
 			if a.listPaneTitles != nil && len(panes) > 0 {
 				allTitles, err := a.listPaneTitles()
 				if err != nil {

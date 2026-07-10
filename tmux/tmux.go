@@ -61,8 +61,19 @@ func parseProcesses(output string) []process {
 	return procs
 }
 
-// hasClaudeDescendant checks if paneShellPID has a descendant process named "claude".
-func hasClaudeDescendant(paneShellPID int, procs []process) bool {
+// agentProcess reports whether a process name belongs to a supported agent.
+// Process names are commonly truncated by ps (and wrapped on NixOS), so match
+// stable fragments rather than exact executable names.
+func agentProcess(comm string) bool {
+	comm = strings.ToLower(comm)
+	return strings.Contains(comm, "claude") ||
+		strings.Contains(comm, "codex") ||
+		strings.Contains(comm, "antigravity") ||
+		comm == "agy" || strings.Contains(comm, ".agy-")
+}
+
+// hasAgentDescendant checks if paneShellPID has a supported agent descendant.
+func hasAgentDescendant(paneShellPID int, procs []process) bool {
 	// Build children map
 	children := make(map[int][]int)
 	commByPid := make(map[int]string)
@@ -76,7 +87,7 @@ func hasClaudeDescendant(paneShellPID int, procs []process) bool {
 	for len(queue) > 0 {
 		pid := queue[0]
 		queue = queue[1:]
-		if strings.Contains(commByPid[pid], "claude") {
+		if agentProcess(commByPid[pid]) {
 			return true
 		}
 		queue = append(queue, children[pid]...)
@@ -105,8 +116,8 @@ func parseTmuxPanes(output string) map[string]int {
 	return panes
 }
 
-// ListClaudePanes returns the set of tmux pane IDs that have a running claude process.
-func ListClaudePanes() (map[string]bool, error) {
+// ListAgentPanes returns tmux panes running Claude Code, Codex, or Antigravity.
+func ListAgentPanes() (map[string]bool, error) {
 	// Get all tmux panes with their shell PIDs
 	tmuxOut, err := exec.Command("tmux", "list-panes", "-a", "-F", "#{pane_id} #{pane_pid}").Output()
 	if err != nil {
@@ -119,17 +130,17 @@ func ListClaudePanes() (map[string]bool, error) {
 		return nil, fmt.Errorf("ps: %w", err)
 	}
 
-	return findClaudePanes(string(tmuxOut), string(psOut)), nil
+	return findAgentPanes(string(tmuxOut), string(psOut)), nil
 }
 
-// findClaudePanes is the testable core: given tmux and ps output, returns pane IDs with claude.
-func findClaudePanes(tmuxOutput, psOutput string) map[string]bool {
+// findAgentPanes is the testable core for supported-agent pane discovery.
+func findAgentPanes(tmuxOutput, psOutput string) map[string]bool {
 	panes := parseTmuxPanes(tmuxOutput)
 	procs := parseProcesses(psOutput)
 
 	result := make(map[string]bool)
 	for paneID, shellPID := range panes {
-		if hasClaudeDescendant(shellPID, procs) {
+		if hasAgentDescendant(shellPID, procs) {
 			result[paneID] = true
 		}
 	}
