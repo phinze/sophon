@@ -5,9 +5,11 @@ import { SSEManager } from "../sse";
 let selectedSessionId = "";
 let recentCollapsed = true;
 
-// Strip common spinner characters and the ✳ prefix from agent pane titles.
-function stripSpinnerPrefix(title: string): string {
-  return title.replace(/^[\u2800-\u28FF✳]\s*/, "").trim();
+// The daemon stores parsed titles now, but old stopped sessions never get
+// another heartbeat. Keep the display tolerant of those legacy raw values.
+function parsePaneTitle(title: string): string {
+  const parsed = title.replace(/^[\u2800-\u28FF✳]\s*/, "").trim();
+  return ["Claude Code", "Codex", "Antigravity"].includes(parsed) ? "" : parsed;
 }
 const lastToolActivity: Map<string, number> = new Map();
 const WORKING_THRESHOLD_MS = 60_000;
@@ -45,8 +47,8 @@ function renderSidebarCard(s: Session, isActive: boolean): string {
   html += "</div>";
 
   // Show pane title (task description set by the terminal agent)
-  const paneTitle = stripSpinnerPrefix(s.pane_title || "");
-  if (paneTitle && paneTitle !== "Claude Code") {
+  const paneTitle = parsePaneTitle(s.pane_title || "");
+  if (paneTitle) {
     html += '<div class="sb-pane-title">' + escapeHtml(paneTitle) + "</div>";
   }
 

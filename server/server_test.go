@@ -169,6 +169,58 @@ func TestNotifyStoresSessionState(t *testing.T) {
 	}
 }
 
+func TestNotifyUsesParsedPaneTitle(t *testing.T) {
+	h := newTestHarness(t)
+	h.createSession(t, "s1", "%5", "/home/user/project")
+
+	sess, _ := h.store.GetSession("s1")
+	// Keep this raw to verify alerts are safe across a daemon upgrade before
+	// the next heartbeat has normalized existing rows.
+	sess.PaneTitle = "⠂ Fix the authentication race"
+	if err := h.store.UpdateSession(sess); err != nil {
+		t.Fatal(err)
+	}
+
+	ch, unsub := h.server.events.Subscribe("s1")
+	defer unsub()
+	h.notify(t, "s1", "permission_prompt", "Allow Bash?")
+
+	sess, _ = h.store.GetSession("s1")
+	const want = "Fix the authentication race · Needs approval"
+	if sess.NotifyTitle != want {
+		t.Errorf("NotifyTitle = %q, want %q", sess.NotifyTitle, want)
+	}
+	select {
+	case evt := <-ch:
+		var data map[string]string
+		if err := json.Unmarshal(evt.Data, &data); err != nil {
+			t.Fatal(err)
+		}
+		if data["title"] != want {
+			t.Errorf("event title = %q, want %q", data["title"], want)
+		}
+	default:
+		t.Fatal("expected notification event")
+	}
+}
+
+func TestNotifyTitleFallsBackWithoutTask(t *testing.T) {
+	h := newTestHarness(t)
+	h.createSession(t, "s1", "%5", "/home/user/project")
+
+	sess, _ := h.store.GetSession("s1")
+	sess.PaneTitle = "Codex"
+	if err := h.store.UpdateSession(sess); err != nil {
+		t.Fatal(err)
+	}
+
+	h.notify(t, "s1", "idle_prompt", "")
+	sess, _ = h.store.GetSession("s1")
+	if sess.NotifyTitle != "test" {
+		t.Errorf("NotifyTitle = %q, want hook fallback", sess.NotifyTitle)
+	}
+}
+
 func TestTurnEndUpdatesLastActivity(t *testing.T) {
 	h := newTestHarness(t)
 	h.createSession(t, "s1", "%5", "/home/user/project")
@@ -580,6 +632,37 @@ func TestAgentRegisterWithoutAlivePanesSkipsReconciliation(t *testing.T) {
 	}
 }
 
+func TestAgentRegisterParsesPaneTitles(t *testing.T) {
+	h := newTestHarness(t)
+	h.createSession(t, "working", "%0", "/home/user/proj")
+	h.createSession(t, "placeholder", "%1", "/home/user/proj")
+
+	body, _ := json.Marshal(map[string]any{
+		"node_name":   "test-node",
+		"url":         "http://127.0.0.1:2588",
+		"alive_panes": []string{"%0", "%1"},
+		"pane_titles": map[string]string{
+			"%0": "✳ Port Rig's session-title parsing",
+			"%1": "Claude Code",
+		},
+	})
+	req := httptest.NewRequest("POST", "/api/agents/register", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	h.server.handleAgentRegister(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("got %d, want 200", w.Code)
+	}
+
+	working, _ := h.store.GetSession("working")
+	if working.PaneTitle != "Port Rig's session-title parsing" {
+		t.Errorf("working PaneTitle = %q", working.PaneTitle)
+	}
+	placeholder, _ := h.store.GetSession("placeholder")
+	if placeholder.PaneTitle != "" {
+		t.Errorf("placeholder PaneTitle = %q, want empty", placeholder.PaneTitle)
+	}
+}
+
 func TestAgentRegister(t *testing.T) {
 	h := newTestHarness(t)
 
@@ -711,6 +794,13 @@ func TestToolActivityDoesNotUpdateLastActivity(t *testing.T) {
 func TestHandlePlanStoresPlanText(t *testing.T) {
 	h := newTestHarness(t)
 	h.createSession(t, "s-plan", "%1", "/home/user/project")
+	sess, _ := h.store.GetSession("s-plan")
+	sess.PaneTitle = "Design the sync protocol"
+	if err := h.store.UpdateSession(sess); err != nil {
+		t.Fatal(err)
+	}
+	ch, unsub := h.server.events.Subscribe("s-plan")
+	defer unsub()
 
 	body, _ := json.Marshal(map[string]string{
 		"plan":      "# Do the thing\n\nStep 1: go",
@@ -730,6 +820,18 @@ func TestHandlePlanStoresPlanText(t *testing.T) {
 	}
 	if sess.PlanText != "# Do the thing\n\nStep 1: go" {
 		t.Errorf("PlanText = %q", sess.PlanText)
+	}
+	select {
+	case evt := <-ch:
+		var data map[string]string
+		if err := json.Unmarshal(evt.Data, &data); err != nil {
+			t.Fatal(err)
+		}
+		if data["title"] != "Design the sync protocol · Plan ready" {
+			t.Errorf("event title = %q", data["title"])
+		}
+	default:
+		t.Fatal("expected plan notification event")
 	}
 }
 

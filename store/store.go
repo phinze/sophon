@@ -36,7 +36,7 @@ type Session struct {
 	Topic       string `json:"topic,omitempty"`
 	PlanSummary string `json:"plan_summary,omitempty"`
 
-	// Pane title set by the terminal agent (e.g. "Migrate blog to Miren")
+	// Task title parsed from the terminal agent's pane title (e.g. "Migrate blog to Miren")
 	PaneTitle string `json:"pane_title,omitempty"`
 
 	// Plan markdown captured from the ExitPlanMode hook (push, not transcript).

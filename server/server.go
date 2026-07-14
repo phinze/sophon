@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/phinze/sophon/sessiontitle"
 	"github.com/phinze/sophon/store"
 	"github.com/phinze/sophon/transcript"
 )
@@ -269,8 +270,9 @@ func (s *Server) handleNotify(w http.ResponseWriter, r *http.Request) {
 	}
 
 	now := time.Now()
+	title := alertTitle(sess, req.NotificationType, req.Title)
 	sess.NotificationType = req.NotificationType
-	sess.NotifyTitle = req.Title
+	sess.NotifyTitle = title
 	sess.NotifyMessage = req.Message
 	sess.NotifiedAt = now
 	sess.LastActivityAt = now
@@ -284,7 +286,7 @@ func (s *Server) handleNotify(w http.ResponseWriter, r *http.Request) {
 	s.events.Publish(id, Event{
 		Type:    EventNotification,
 		Session: id,
-		Data:    mustJSON(map[string]string{"type": req.NotificationType, "message": req.Message, "title": req.Title}),
+		Data:    mustJSON(map[string]string{"type": req.NotificationType, "message": req.Message, "title": title}),
 	})
 
 	s.logger.Info("notification stored", "session_id", id, "type", req.NotificationType)
@@ -330,7 +332,10 @@ func (s *Server) handlePlan(w http.ResponseWriter, r *http.Request) {
 	s.events.Publish(id, Event{
 		Type:    EventNotification,
 		Session: id,
-		Data:    mustJSON(map[string]string{"type": "plan_approval"}),
+		Data: mustJSON(map[string]string{
+			"type":  "plan_approval",
+			"title": alertTitle(sess, "plan_approval", "Plan ready for approval"),
+		}),
 	})
 
 	s.logger.Info("plan stored", "session_id", id, "plan_len", len(req.Plan))
@@ -560,8 +565,13 @@ func (s *Server) handleAgentRegister(w http.ResponseWriter, r *http.Request) {
 		s.reconcileSessions(req.NodeName, *req.AlivePanes)
 	}
 
-	// Update pane titles for active sessions
+	// Store semantic task titles rather than terminal animation state. Besides
+	// keeping the sidebar quiet, this makes the same concise label available to
+	// alerts emitted between heartbeats.
 	if len(req.PaneTitles) > 0 {
+		for pane, title := range req.PaneTitles {
+			req.PaneTitles[pane] = sessiontitle.Parse(title)
+		}
 		if err := s.store.UpdatePaneTitles(req.NodeName, req.PaneTitles); err != nil {
 			s.logger.Error("failed to update pane titles", "error", err, "node", req.NodeName)
 		}
@@ -569,6 +579,27 @@ func (s *Server) handleAgentRegister(w http.ResponseWriter, r *http.Request) {
 
 	s.logger.Debug("agent registered", "node", req.NodeName, "url", req.URL)
 	w.WriteHeader(http.StatusOK)
+}
+
+func alertTitle(sess *store.Session, notificationType, fallback string) string {
+	if sess == nil {
+		return fallback
+	}
+	title := sessiontitle.Parse(sess.PaneTitle)
+	if title == "" {
+		return fallback
+	}
+
+	var state string
+	switch notificationType {
+	case "permission_prompt":
+		state = "Needs approval"
+	case "plan_approval":
+		state = "Plan ready"
+	default:
+		state = "Waiting for input"
+	}
+	return title + " · " + state
 }
 
 // reconcileSessions stops active sessions whose tmux pane is not in the alive set.
