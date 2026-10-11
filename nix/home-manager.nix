@@ -98,7 +98,7 @@ in
     }
 
     # When agent is enabled on Linux, run as systemd user service
-    (mkIf (cfg.agent.enable && pkgs.stdenv.isLinux) {
+    (mkIf (cfg.agent.enable && pkgs.stdenv.hostPlatform.isLinux) {
       systemd.user.services.sophon-agent = {
       Unit = {
         Description = "Sophon Agent - per-node transcript and tmux proxy";
@@ -133,7 +133,7 @@ in
     })
 
     # When agent is enabled on macOS, run as launchd agent
-    (mkIf (cfg.agent.enable && pkgs.stdenv.isDarwin) {
+    (mkIf (cfg.agent.enable && pkgs.stdenv.hostPlatform.isDarwin) {
       launchd.agents.sophon-agent = {
         enable = cfg.agent.autoStart;
         config = {
