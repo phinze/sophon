@@ -53,14 +53,11 @@ miren rollback                # revert to previous version
 
 ### Agent (Nix)
 
-The agent runs on each node via the home-manager module. Update it through `../nix-config`:
-
-```bash
-cd ../nix-config
-./scripts/update-flake-input -y sophon   # update flake input + commit
-nh os switch .                           # apply on NixOS
-nh darwin switch .                       # apply on macOS
-```
+The agent runs on each node via the home-manager module, as the `sophon`
+input in nix-config. That input is bumped by nix-config-sync on foxtrotbase, so
+rolling out a change is: push to `main`, then `nix-config-sync kick`. Don't bump
+the input or switch by hand. The `nix-config` skill covers the details,
+including the Mac.
 
 ## Nix Integration
 
